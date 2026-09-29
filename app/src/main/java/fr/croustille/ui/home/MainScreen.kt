@@ -29,6 +29,7 @@ import androidx.navigation.NavController
 import fr.croustille.data.CartRepo
 import fr.croustille.data.CroustillantApi
 import fr.croustille.data.FONDERIE_CODE
+import fr.croustille.data.IzlyRepo
 import fr.croustille.data.OrdersRepo
 import fr.croustille.data.PersistentCookieJar
 import fr.croustille.data.Prefs
@@ -48,11 +49,13 @@ fun MainScreen(
     auth: WpAuth,
     cart: CartRepo,
     orders: OrdersRepo,
+    izly: IzlyRepo,
     prefs: Prefs,
     selection: Int,
     rootNav: NavController,
+    ongletInitial: Int = 0,
 ) {
-    var onglet by remember { mutableIntStateOf(0) }
+    var onglet by remember(selection) { mutableIntStateOf(ongletInitial.coerceIn(0, 3)) }
     val commandable = isCommandable(selection)
     var titreLieu by remember(selection) { mutableStateOf(if (selection == FONDERIE_CODE) fonderieEntry().nom else "…") }
     var sousTitre by remember(selection) { mutableStateOf(if (selection == FONDERIE_CODE) fonderieEntry().adresse!! else "") }
@@ -124,6 +127,7 @@ fun MainScreen(
             )
             else -> AccountScreen(
                 auth = auth,
+                izly = izly,
                 prefs = prefs,
                 onPaiement = { rootNav.navigate("paiement") },
                 modifier = mod,

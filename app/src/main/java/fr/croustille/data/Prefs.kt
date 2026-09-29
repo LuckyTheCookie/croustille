@@ -15,6 +15,7 @@ private val REGION = intPreferencesKey("region_code")
 private val DONE = booleanPreferencesKey("onboarding_done")
 private val MENU13H = booleanPreferencesKey("menu13h")
 private val STOCK_ON = booleanPreferencesKey("stock_on")
+private val RDV_ON = booleanPreferencesKey("rdv_retrait")
 private val STOCK_H = intPreferencesKey("stock_hours")
 private val STOCK_SEUIL = intPreferencesKey("stock_seuil")
 private val LAST_MENU = stringPreferencesKey("last_menu_date")
@@ -27,6 +28,7 @@ class Prefs(private val ctx: Context) {
     val onboardingDone: Flow<Boolean> = ctx.prefs.data.map { it[DONE] ?: false }
     val menu13h: Flow<Boolean> = ctx.prefs.data.map { it[MENU13H] ?: false }
     val stockOn: Flow<Boolean> = ctx.prefs.data.map { it[STOCK_ON] ?: false }
+    val rdvRetrait: Flow<Boolean> = ctx.prefs.data.map { it[RDV_ON] ?: false }
     val stockHours: Flow<Int> = ctx.prefs.data.map { it[STOCK_H] ?: 4 }
     val stockSeuil: Flow<Int> = ctx.prefs.data.map { it[STOCK_SEUIL] ?: 10 }
     val lastMenuDate: Flow<String?> = ctx.prefs.data.map { it[LAST_MENU] }
@@ -44,6 +46,7 @@ class Prefs(private val ctx: Context) {
     suspend fun recommencer() { ctx.prefs.edit { it[DONE] = false } }
 
     suspend fun setMenu13h(v: Boolean) { ctx.prefs.edit { it[MENU13H] = v } }
+    suspend fun setRdvRetrait(v: Boolean) { ctx.prefs.edit { it[RDV_ON] = v } }
     suspend fun setStockOn(v: Boolean) { ctx.prefs.edit { it[STOCK_ON] = v } }
     suspend fun setStockHours(v: Int) { ctx.prefs.edit { it[STOCK_H] = v } }
     suspend fun setStockSeuil(v: Int) { ctx.prefs.edit { it[STOCK_SEUIL] = v } }

@@ -60,6 +60,9 @@ import fr.croustille.data.Commande
 import fr.croustille.data.LigneCommande
 import fr.croustille.data.OrdersRepo
 import fr.croustille.data.PasConnecte
+import fr.croustille.data.Retrait
+import fr.croustille.data.dateRetrait
+import fr.croustille.data.retraitDe
 import fr.croustille.ui.onboarding.StaggeredIn
 import kotlinx.coroutines.launch
 
@@ -74,12 +77,14 @@ fun OrdersScreen(
     var erreur by remember { mutableStateOf<String?>(null) }
     var selection by remember { mutableStateOf<Commande?>(null) }
     var refresh by remember { mutableStateOf(false) }
+    var retraitHero by remember { mutableStateOf<Retrait?>(null) }
     val scope = rememberCoroutineScope()
 
     suspend fun charger() {
         erreur = null
         try {
             commandes = repo.commandes()
+            retraitHero = null
         } catch (e: PasConnecte) {
             commandes = null
             erreur = "connecte-toi"
@@ -88,6 +93,17 @@ fun OrdersScreen(
         }
     }
     LaunchedEffect(Unit) { charger() }
+    // Date de retrait (et non date d'achat) pour la dernière commande.
+    LaunchedEffect(commandes) {
+        val premiere = commandes?.firstOrNull()
+        if (premiere != null) {
+            try {
+                retraitHero = retraitDe(repo.detail(premiere))
+            } catch (e: Exception) {
+                retraitHero = null
+            }
+        }
+    }
 
     BackHandler(enabled = selection != null) { selection = null }
 
@@ -166,7 +182,7 @@ fun OrdersScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        item { HeroDerniere(commandes!!.first(), onVoir = { selection = commandes!!.first() }) }
+                        item { HeroDerniere(commandes!!.first(), retraitHero, onVoir = { selection = commandes!!.first() }) }
                         itemsIndexed(commandes!!.drop(1), key = { _, c -> c.numero + c.date }) { i, c ->
                             StaggeredIn(i) { LigneCommandeCard(c, onVoir = { selection = c }) }
                         }
@@ -178,7 +194,7 @@ fun OrdersScreen(
 }
 
 @Composable
-private fun HeroDerniere(c: Commande, onVoir: () -> Unit) {
+private fun HeroDerniere(c: Commande, retrait: Retrait?, onVoir: () -> Unit) {
     val presse = LocalClipboardManager.current
     Card(
         onClick = onVoir,
@@ -200,7 +216,11 @@ private fun HeroDerniere(c: Commande, onVoir: () -> Unit) {
                 fontSize = 64.sp,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
-            Text("${c.statut} · ${c.date}", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                texteRetrait(retrait) ?: "${c.statut} · commandée le ${c.date}",
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+            )
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { presse.setText(AnnotatedString(c.numero)) }) {
                 Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp))
@@ -209,6 +229,16 @@ private fun HeroDerniere(c: Commande, onVoir: () -> Unit) {
             }
         }
     }
+}
+
+/** "À retirer le mardi 29 septembre · 11h45–13h30" (ou texte brut si inanalysable). */
+fun texteRetrait(r: Retrait?): String? {
+    if (r == null) return null
+    val quand = r.dateRetrait()?.format(
+        java.time.format.DateTimeFormatter.ofPattern("EEEE d MMMM", java.util.Locale.FRENCH),
+    )?.replaceFirstChar { it.uppercase() } ?: r.jour
+    val heure = r.heure.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+    return "À retirer le $quand$heure"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -272,7 +302,11 @@ private fun TicketScreen(
                     )
                     Text("Montre ce numéro au retrait", style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(6.dp))
-                    Text("${commande.statut} · ${commande.date} · ${commande.total}", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                    val retrait = lignes?.let { retraitDe(it) }
+                    Text(
+                        texteRetrait(retrait) ?: "${commande.statut} · ${commande.date} · ${commande.total}",
+                        style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
+                    )
                     Spacer(Modifier.height(10.dp))
                     Button(onClick = { presse.setText(AnnotatedString(commande.numero)) }) {
                         Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(18.dp))

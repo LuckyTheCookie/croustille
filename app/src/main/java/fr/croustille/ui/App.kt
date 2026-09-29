@@ -19,6 +19,8 @@ import androidx.navigation.navArgument
 import fr.croustille.data.CartRepo
 import fr.croustille.data.CookieStore
 import fr.croustille.data.CroustillantApi
+import fr.croustille.data.IzlyRepo
+import fr.croustille.data.IzlyStore
 import fr.croustille.data.OrdersRepo
 import fr.croustille.data.PersistentCookieJar
 import fr.croustille.data.Prefs
@@ -33,7 +35,7 @@ import okhttp3.OkHttpClient
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun App(prefs: Prefs) {
+fun App(prefs: Prefs, ongletInitial: Int = 0) {
     val nav = rememberNavController()
     val ctx = LocalContext.current
     val jar = remember { PersistentCookieJar(CookieStore(ctx)) }
@@ -43,6 +45,7 @@ fun App(prefs: Prefs) {
     val auth = remember { WpAuth(client, jar) }
     val cart = remember { CartRepo(store, client) }
     val orders = remember { OrdersRepo(client) }
+    val izly = remember { IzlyRepo(OkHttpClient.Builder().build(), IzlyStore(ctx)) }
 
     val done by prefs.onboardingDone.collectAsState(initial = null)
     val selection by prefs.restoCode.collectAsState(initial = -1)
@@ -70,7 +73,7 @@ fun App(prefs: Prefs) {
             )
         }
         composable("main") {
-            MainScreen(api, store, auth, cart, orders, prefs, selection, nav)
+            MainScreen(api, store, auth, cart, orders, izly, prefs, selection, nav, ongletInitial)
         }
         composable("paiement") { PaiementScreen(jar) }
     }

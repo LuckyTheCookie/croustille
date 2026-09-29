@@ -11,6 +11,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = Prefs(applicationContext)
-        setContent { CroustilleTheme { App(prefs) } }
+        // Les notifs (ex: suivi du retrait) peuvent demander un onglet précis.
+        val onglet = intent?.getIntExtra("onglet", 0) ?: 0
+        setContent { CroustilleTheme { App(prefs, onglet) } }
     }
 }

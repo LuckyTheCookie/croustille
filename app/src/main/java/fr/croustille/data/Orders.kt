@@ -23,6 +23,38 @@ data class LigneCommande(
     val meta: List<Pair<String, String>> = emptyList(), // ex Zone/Jour/Heure de récupération
 )
 
+data class Retrait(val jour: String, val heure: String, val zone: String)
+
+/** Extrait les infos de retrait (plugin CrousLocation) des lignes de commande. */
+fun retraitDe(lignes: List<LigneCommande>): Retrait? {
+    fun cherche(mot: String): String = lignes.asSequence()
+        .flatMap { it.meta.asSequence() }
+        .firstOrNull { (k, _) -> k.lowercase().contains(mot) }?.second.orEmpty()
+    val jour = cherche("jour")
+    if (jour.isBlank()) return null
+    return Retrait(jour = jour, heure = cherche("heure"), zone = cherche("zone"))
+}
+
+/** "28/9/2026" (format du site, sans zéros) -> LocalDate. */
+fun Retrait.dateRetrait(): java.time.LocalDate? = try {
+    val p = jour.split('/', '.').map { it.trim().toInt() }
+    java.time.LocalDate.of(p[2], p[1], p[0])
+} catch (e: Exception) {
+    null
+}
+
+/** "11:45-13:30" -> (début minutes, fin minutes). */
+fun Retrait.creneauMinutes(): Pair<Int, Int>? = try {
+    val (a, b) = heure.split('-').map { it.trim() }
+    fun m(s: String): Int {
+        val (h, mi) = s.split(':').map { it.toInt() }
+        return h * 60 + mi
+    }
+    m(a) to m(b)
+} catch (e: Exception) {
+    null
+}
+
 class PasConnecte : IllegalStateException("Connecte-toi dans l'onglet Compte pour voir tes commandes.")
 
 /** Lit "Mes commandes" WooCommerce avec la session de l'app (sans WebView). */
