@@ -9,6 +9,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,12 +20,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
@@ -45,6 +51,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -76,147 +83,195 @@ fun AccountScreen(
     onPaiement: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(52.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(30.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text("Mon compte", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
+                    Text("Connexions et rappels", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        item {
+            Section("CrousAndGo") {
+                SessionCrous(auth = auth, onPaiement = onPaiement)
+            }
+        }
+        item {
+            Section("Izly") {
+                CarteIzly(izly = izly)
+            }
+        }
+        item {
+            Section("Rappels") {
+                CarteRappels(prefs = prefs)
+            }
+        }
+        item {
+            Text(
+                "Astuce : touche le bandeau du restaurant dans l'onglet Menus pour changer de lieu.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun Section(titre: String, contenu: @Composable () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            titre.uppercase(),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 4.dp),
+        )
+        contenu()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session CrousAndGo
+// ---------------------------------------------------------------------------
+@Composable
+private fun SessionCrous(auth: WpAuth, onPaiement: () -> Unit) {
     var log by remember { mutableStateOf("") }
     var pwd by remember { mutableStateOf("") }
     var connecte by remember { mutableStateOf(auth.hasSession()) }
     var msg by remember {
         mutableStateOf(
-            if (auth.hasSession()) "Session CROUS active — tes commandes se synchronisent toutes seules."
-            else "Connecte-toi avec ton compte CrousAndGo pour commander.",
+            if (auth.hasSession()) "Session active — tes commandes se synchronisent toutes seules."
+            else "Connecte-toi pour commander et voir tes commandes.",
         )
     }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    Column(modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(52.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(30.dp))
-            }
-            Spacer(Modifier.width(12.dp))
-            Column {
-                Text("Mon compte", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
-                Text(if (connecte) "Session CROUS active" else "Connexion CrousAndGo", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        if (!connecte) {
-            Card(
-                colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer),
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        log, { log = it }, label = { Text("Identifiant ou e-mail") },
-                        singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        pwd, { pwd = it }, label = { Text("Mot de passe") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
-                    )
-                    Button(
-                        onClick = {
-                            busy = true
-                            scope.launch {
-                                msg = try {
-                                    if (auth.login(log, pwd)) {
-                                        connecte = true
-                                        pwd = ""
-                                        "Session CROUS active — tes commandes se synchronisent toutes seules."
-                                    } else "Identifiants refusés — réessaie."
-                                } catch (e: Exception) {
-                                    "Erreur réseau : ${e.message}"
-                                }
-                                busy = false
+    Card(
+        colors = CardDefaults.cardColors(
+            if (connecte) MaterialTheme.colorScheme.tertiaryContainer
+            else MaterialTheme.colorScheme.surfaceContainer,
+        ),
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            LigneStatut(
+                ok = connecte,
+                texte = if (connecte) "Connecté" else "Déconnecté",
+            )
+            if (!connecte) {
+                OutlinedTextField(
+                    log, { log = it }, label = { Text("Identifiant ou e-mail") },
+                    singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    pwd, { pwd = it }, label = { Text("Mot de passe") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+                )
+                Button(
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            msg = try {
+                                if (auth.login(log, pwd)) {
+                                    connecte = true
+                                    pwd = ""
+                                    "Session active — tes commandes se synchronisent toutes seules."
+                                } else "Identifiants refusés — réessaie."
+                            } catch (e: Exception) {
+                                "Erreur réseau : ${e.message}"
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(if (busy) "Connexion…" else "Se connecter")
-                    }
-                    Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            busy = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (busy) "Connexion…" else "Se connecter")
+                }
+            } else {
+                Button(onClick = onPaiement, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.ShoppingBag, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Voir mon panier / payer (Izly)")
+                }
+                OutlinedButton(
+                    onClick = {
+                        auth.logout()
+                        connecte = false
+                        log = ""
+                        msg = "Connecte-toi pour commander et voir tes commandes."
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Logout, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Se déconnecter")
                 }
             }
-        } else {
-            Card(
-                colors = CardDefaults.cardColors(MaterialTheme.colorScheme.tertiaryContainer),
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.tertiary)
-                        Spacer(Modifier.width(8.dp))
-                        Text(msg, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    }
-                    Button(onClick = onPaiement, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Default.ShoppingBag, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Voir mon panier / payer (Izly)")
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            auth.logout()
-                            connecte = false
-                            log = ""
-                            msg = "Connecte-toi avec ton compte CrousAndGo pour commander."
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(Icons.Default.Logout, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Se déconnecter")
-                    }
-                }
-            }
+            Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-
-        IzlyCard(izly)
-
-        RappelsCard(prefs)
-
-        Text(
-            "Astuce : touche le bandeau du restaurant dans l'onglet Menus pour changer de lieu.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
 @Composable
-private fun IzlyCard(izly: IzlyRepo) {
+private fun LigneStatut(ok: Boolean, texte: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier.size(12.dp).clip(CircleShape)
+                .background(if (ok) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(texte, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Izly : formulaire -> SMS -> solde (API REST officielle détournée façon Papillon)
+// ---------------------------------------------------------------------------
+private const val ETAPE_FORM = 0
+private const val ETAPE_SMS = 1
+private const val ETAPE_SOLDE = 2
+
+@Composable
+private fun CarteIzly(izly: IzlyRepo) {
     var id by remember { mutableStateOf("") }
     var pin by remember { mutableStateOf("") }
-    var solde by remember { mutableStateOf<String?>(null) }
+    var lienColle by remember { mutableStateOf("") }
+    var etape by remember { mutableStateOf(if (izly.aUneSession()) ETAPE_SOLDE else ETAPE_FORM) }
+    var solde by remember { mutableStateOf<Double?>(null) }
     var erreur by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    var lie by remember { mutableStateOf(izly.aDesIdentifiants()) }
     val scope = rememberCoroutineScope()
 
-    suspend fun charger(nouveauId: String, nouveauPin: String) {
+    suspend fun chargerSolde() {
         busy = true
         erreur = null
-        val r = izly.solde(nouveauId, nouveauPin)
+        val r = izly.solde()
         busy = false
         if (r.isSuccess) {
             solde = r.getOrNull()
-            pin = ""
-            lie = true
+            etape = ETAPE_SOLDE
         } else {
             erreur = r.exceptionOrNull()?.message
+            if (r.exceptionOrNull()?.message?.contains("reconnecte") == true) etape = ETAPE_FORM
         }
     }
-    // Auto-refresh silencieux si identifiants mémorisés.
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        if (lie) {
-            val r = izly.soldeSauve()
-            if (r?.isSuccess == true) solde = r.getOrNull()
-        }
+    LaunchedEffect(Unit) {
+        if (etape == ETAPE_SOLDE) chargerSolde()
     }
 
     Card(
@@ -235,63 +290,136 @@ private fun IzlyCard(izly: IzlyRepo) {
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text("Solde Izly", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Recharge et paiements CROUS", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        when (etape) {
+                            ETAPE_SOLDE -> "Compte lié"
+                            ETAPE_SMS -> "Activation en cours"
+                            else -> "Non lié"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
-                if (solde != null) {
-                    IconButton(onClick = {
-                        scope.launch {
-                            busy = true
-                            val r = izly.soldeSauve()
-                            busy = false
-                            if (r?.isSuccess == true) solde = r.getOrNull()
-                            else erreur = r?.exceptionOrNull()?.message
-                        }
-                    }) {
+                if (etape == ETAPE_SOLDE) {
+                    IconButton(onClick = { scope.launch { chargerSolde() } }) {
                         if (busy) CircularProgressIndicator(modifier = Modifier.size(20.dp))
                         else Icon(Icons.Default.Refresh, "Actualiser")
                     }
                 }
             }
 
-            if (solde != null) {
-                Text(solde!!, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
-                TextButton(onClick = {
-                    izly.oublier()
-                    solde = null
-                    lie = false
-                    id = ""
-                }) { Text("Oublier mes identifiants Izly") }
-            } else {
-                OutlinedTextField(
-                    id, { id = it }, label = { Text("E-mail ou mobile Izly") },
-                    singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    pin, { pin = it }, label = { Text("Code secret (6 chiffres)") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
-                )
-                Button(
-                    onClick = { scope.launch { charger(id.trim(), pin.trim()) } },
-                    enabled = !busy && id.isNotBlank() && pin.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(if (busy) "Connexion…" else "Voir mon solde")
+            when (etape) {
+                ETAPE_SOLDE -> {
+                    if (solde != null) {
+                        Text(
+                            "%.2f €".format(solde),
+                            style = MaterialTheme.typography.displaySmall,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    } else if (busy) {
+                        CircularProgressIndicator()
+                    }
+                    erreur?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = {
+                        izly.oublier()
+                        solde = null
+                        etape = ETAPE_FORM
+                        id = ""
+                    }) { Text("Dissocier mon compte Izly") }
                 }
-                erreur?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-                Text(
-                    "Identifiants chiffrés sur l'appareil, jamais envoyés ailleurs qu'à Izly.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                ETAPE_SMS -> {
+                    LigneStatut(ok = false, texte = "SMS envoyé")
+                    Text(
+                        "Izly t'a envoyé un SMS avec un lien d'activation. Touche-le : il ouvrira directement Croustille. Sinon, colle-le ci-dessous.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedTextField(
+                        lienColle, { lienColle = it }, label = { Text("Lien reçu par SMS") },
+                        singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    busy = true
+                                    erreur = null
+                                    val r = izly.activer(lienColle.trim())
+                                    busy = false
+                                    if (r.isSuccess) {
+                                        lienColle = ""
+                                        chargerSolde()
+                                    } else erreur = r.exceptionOrNull()?.message
+                                }
+                            },
+                            enabled = !busy && lienColle.isNotBlank(),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Default.ContentPaste, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (busy) "…" else "Activer")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    busy = true
+                                    val r = izly.login(id.trim(), pin.trim())
+                                    busy = false
+                                    if (r.isFailure) erreur = r.exceptionOrNull()?.message
+                                }
+                            },
+                            enabled = !busy,
+                        ) { Text("Renvoyer") }
+                    }
+                    erreur?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = { etape = ETAPE_FORM }) { Text("Changer d'identifiants") }
+                }
+                else -> {
+                    OutlinedTextField(
+                        id, { id = it }, label = { Text("E-mail ou mobile Izly") },
+                        singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        pin, { pin = it }, label = { Text("Code secret (6 chiffres)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+                    )
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                busy = true
+                                erreur = null
+                                val r = izly.login(id.trim(), pin.trim())
+                                busy = false
+                                if (r.isSuccess) {
+                                    etape = ETAPE_SMS
+                                } else erreur = r.exceptionOrNull()?.message
+                            }
+                        },
+                        enabled = !busy && id.isNotBlank() && pin.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.Mail, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (busy) "Envoi…" else "Recevoir le SMS d'activation")
+                    }
+                    erreur?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                    Text(
+                        "Première liaison uniquement : Izly vérifie ce nouvel appareil par SMS (comme Papillon). Ensuite, plus besoin de code.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+// ---------------------------------------------------------------------------
+// Rappels (refonte : lignes aérées, chips qui passent à la ligne)
+// ---------------------------------------------------------------------------
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun RappelsCard(prefs: Prefs) {
+private fun CarteRappels(prefs: Prefs) {
     val menuOn by prefs.menu13h.collectAsState(initial = false)
     val stockOn by prefs.stockOn.collectAsState(initial = false)
     val rdvOn by prefs.rdvRetrait.collectAsState(initial = false)
@@ -321,7 +449,7 @@ private fun RappelsCard(prefs: Prefs) {
         shape = RoundedCornerShape(28.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
@@ -335,7 +463,7 @@ private fun RappelsCard(prefs: Prefs) {
                     Text("Pour ne jamais rater un repas", style = MaterialTheme.typography.bodySmall)
                 }
             }
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
 
             RappelLigne(
                 titre = "Menu du lendemain",
@@ -353,7 +481,10 @@ private fun RappelsCard(prefs: Prefs) {
                     }
                 },
             )
-            HorizontalDivider(color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f))
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f),
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
             RappelLigne(
                 titre = "Heure du rendez-vous",
                 sousTitre = "Détecté à 8h, suivi jusqu'à la fin du retrait",
@@ -370,7 +501,10 @@ private fun RappelsCard(prefs: Prefs) {
                     }
                 },
             )
-            HorizontalDivider(color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f))
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f),
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
             RappelLigne(
                 titre = "Stock bas",
                 sousTitre = "Prévient quand il reste peu de menus",
@@ -389,8 +523,9 @@ private fun RappelsCard(prefs: Prefs) {
             )
 
             if (stockOn) {
+                Spacer(Modifier.height(4.dp))
                 Text("Vérifier", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(1, 2, 4, 8).forEach { h ->
                         FilterChip(
                             selected = heures == h,
@@ -405,7 +540,7 @@ private fun RappelsCard(prefs: Prefs) {
                     }
                 }
                 Text("M'alerter sous", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(5, 10, 20).forEach { s ->
                         FilterChip(
                             selected = seuil == s,
@@ -414,8 +549,8 @@ private fun RappelsCard(prefs: Prefs) {
                         )
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Timer, null, modifier = Modifier.size(14.dp))
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(Icons.Default.Timer, null, modifier = Modifier.size(14.dp).padding(top = 2.dp))
                     Spacer(Modifier.width(4.dp))
                     Text(
                         "2–3 petites requêtes par passage, rien entre les passages. Si les notifs n'arrivent pas, désactive l'optimisation batterie pour Croustille.",
@@ -430,10 +565,10 @@ private fun RappelsCard(prefs: Prefs) {
 
 @Composable
 private fun RappelLigne(titre: String, sousTitre: String, actif: Boolean, onBasculer: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
         Box(
             Modifier.size(40.dp).clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)),
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(

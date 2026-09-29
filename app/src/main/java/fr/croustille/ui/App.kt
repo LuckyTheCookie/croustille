@@ -7,7 +7,9 @@ import androidx.compose.material3.LoadingIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -27,6 +29,7 @@ import fr.croustille.data.Prefs
 import fr.croustille.data.STRASBOURG_CODE
 import fr.croustille.data.StoreApi
 import fr.croustille.data.WpAuth
+import fr.croustille.ui.account.ActivationIzlyScreen
 import fr.croustille.ui.home.MainScreen
 import fr.croustille.ui.home.PaiementScreen
 import fr.croustille.ui.onboarding.CrousScreen
@@ -35,7 +38,7 @@ import okhttp3.OkHttpClient
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun App(prefs: Prefs, ongletInitial: Int = 0) {
+fun App(prefs: Prefs, ongletInitial: Int = 0, activationIzly: String? = null) {
     val nav = rememberNavController()
     val ctx = LocalContext.current
     val jar = remember { PersistentCookieJar(CookieStore(ctx)) }
@@ -52,6 +55,12 @@ fun App(prefs: Prefs, ongletInitial: Int = 0) {
 
     if (done == null) {
         Box(Modifier.fillMaxSize(), Alignment.Center) { LoadingIndicator() }
+        return
+    }
+
+    var activation by remember(activationIzly) { mutableStateOf(activationIzly) }
+    activation?.let { url ->
+        ActivationIzlyScreen(izly = izly, url = url, onTermine = { activation = null })
         return
     }
 
