@@ -132,3 +132,8 @@ fun notifierBonAppetit(ctx: Context, numero: String) {
             .build(),
     )
 }
+
+/** Coupe la notif de suivi du retrait (bouton "tout arrêter", debug). */
+fun annulerRetrait(ctx: Context) {
+    ctx.getSystemService(NotificationManager::class.java)?.cancel(ID_RETRAIT)
+}

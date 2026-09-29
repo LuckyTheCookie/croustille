@@ -76,6 +76,7 @@ fun planifierRdv(ctx: Context, actif: Boolean) {
     val wm = WorkManager.getInstance(ctx)
     if (!actif) {
         wm.cancelUniqueWork(W_RDV)
+        annulerRetrait(ctx)
         return
     }
     val req = PeriodicWorkRequestBuilder<RdvWorker>(24, TimeUnit.HOURS)

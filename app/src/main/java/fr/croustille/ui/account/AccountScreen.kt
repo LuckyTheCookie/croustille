@@ -67,9 +67,11 @@ import androidx.core.content.ContextCompat
 import fr.croustille.data.IzlyRepo
 import fr.croustille.data.Prefs
 import fr.croustille.data.WpAuth
+import fr.croustille.notif.annulerRetrait
 import fr.croustille.notif.planifierMenu13h
 import fr.croustille.notif.planifierRdv
 import fr.croustille.notif.planifierStock
+import fr.croustille.notif.planifierSuiviRetrait
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -122,6 +124,11 @@ fun AccountScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        item {
+            Section("Zone test") {
+                ZoneTest(prefs = prefs)
+            }
         }
     }
 }
@@ -517,4 +524,86 @@ private fun labelHeures(h: Int): String = when (h) {
     2 -> "2 h"
     4 -> "4 h"
     else -> "$h h"
+}
+
+@Composable
+private fun ZoneTest(prefs: Prefs) {
+    val scope = rememberCoroutineScope()
+    val appCtx = LocalContext.current.applicationContext
+    var message by remember { mutableStateOf<String?>(null) }
+
+    Card(
+        colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer),
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                "Pour tester les rappels sans attendre demain.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        prefs.setRdvRetrait(true)
+                        planifierRdv(appCtx, true)
+                        androidx.work.WorkManager.getInstance(appCtx).enqueueUniqueWork(
+                            "rdv-test",
+                            androidx.work.ExistingWorkPolicy.REPLACE,
+                            androidx.work.OneTimeWorkRequestBuilder<fr.croustille.notif.RdvWorker>()
+                                .setConstraints(
+                                    androidx.work.Constraints.Builder()
+                                        .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                                        .build(),
+                                )
+                                .build(),
+                        )
+                        message = "Détection lancée : regarde tes notifs."
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Simuler : commande trouvée (détection 8h)")
+            }
+            OutlinedButton(
+                onClick = {
+                    val z = java.time.ZonedDateTime.now(java.time.ZoneId.of("Europe/Paris"))
+                    val maintenant = z.hour * 60 + z.minute
+                    planifierSuiviRetrait(appCtx, "#TEST", maintenant, maintenant + 120)
+                    message = "Suivi lancé : notif persistante avec barre de progression."
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Timer, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Simuler : il est 11h30 (suivi retrait)")
+            }
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        prefs.setMenu13h(false)
+                        prefs.setRdvRetrait(false)
+                        prefs.setStockOn(false)
+                        planifierMenu13h(appCtx, false)
+                        planifierRdv(appCtx, false)
+                        planifierStock(appCtx, false, 4)
+                        androidx.work.WorkManager.getInstance(appCtx).cancelAllWork()
+                        annulerRetrait(appCtx)
+                        message = "Tout arrêté : notifs coupées et suivis annulés."
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Warning, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Tout arrêter (notifs + suivis)")
+            }
+            message?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
 }
