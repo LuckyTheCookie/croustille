@@ -36,9 +36,24 @@ class IzlyPay(private val client: OkHttpClient) {
                         IllegalStateException("Page Izly sans formulaire (token expiré ?)."),
                     )
                 }
-                val form = formulaires.firstOrNull { f -> f.selectFirst("input[type=password]") != null }
+                val form = doc.selectFirst("form#id_post_form")
+                    ?: formulaires.firstOrNull { f -> f.selectFirst("input[type=password]") != null }
                     ?: formulaires.maxByOrNull { it.select("input").size }!!
-                val action = form.absUrl("action").ifBlank { authorizeUrl }
+                // L'action vient du bouton "Valider" (data-action), sinon du form, sinon de la page.
+                val boutonValider = form.select("button[data-action]").firstOrNull { b ->
+                    "authorize" in b.attr("data-action").lowercase()
+                } ?: doc.select("button[data-action]").firstOrNull { b ->
+                    "authorize" in b.attr("data-action").lowercase()
+                }
+                val action = form.absUrl("action").ifBlank {
+                    boutonValider?.let { btn ->
+                        try {
+                            authorizeUrl.toHttpUrl().resolve(btn.attr("data-action")).toString()
+                        } catch (e: Exception) {
+                            ""
+                        }
+                    }.orEmpty()
+                }.ifBlank { authorizeUrl }
                 val methode = form.attr("method").ifBlank { "post" }
                 Log.i(TAG, "form $methode $action (${form.select("input").size} champs)")
 
@@ -77,17 +92,28 @@ class IzlyPay(private val client: OkHttpClient) {
                 reponse.use {
                     val finale = it.request.url.toString()
                     val corpsTexte = try {
-                        it.peekBody(200_000).string()
+                        it.peekBody(300_000).string()
                     } catch (e: Exception) {
                         ""
                     }
                     Log.i(TAG, "final=$finale code=${it.code}")
+                    val docFin = Jsoup.parse(corpsTexte, finale)
+                    val erreurPage = docFin.selectFirst("#id_error")?.text()?.trim().orEmpty()
+                    if (erreurPage.isNotBlank()) {
+                        return@withContext Result.failure(IllegalStateException("Izly : $erreurPage"))
+                    }
                     if ("error" in finale.lowercase() || "erreur" in finale.lowercase()) {
                         return@withContext Result.failure(
                             IllegalStateException("Izly a refusé (solde ? identifiants ?)."),
                         )
                     }
-                    if (corpsTexte.contains("name=\"Password\"") || corpsTexte.contains("Code secret")) {
+                    if ("crousandgo" in finale.lowercase()) {
+                        // Retour boutique = paiement accepté, commande créée.
+                        return@withContext Result.success(finale)
+                    }
+                    if (docFin.selectFirst("input[type=password]") != null ||
+                        corpsTexte.contains("Code secret")
+                    ) {
                         return@withContext Result.failure(
                             IllegalStateException("Izly redemande les identifiants."),
                         )

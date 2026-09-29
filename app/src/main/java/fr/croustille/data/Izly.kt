@@ -60,6 +60,8 @@ class IzlyRepo(private val client: OkHttpClient, private val store: IzlyStore) {
 
     fun aDesIdentifiants(): Boolean = store.lireIdentifiants() != null
 
+    fun lireIdentifiants(): Pair<String, String>? = store.lireIdentifiants()
+
     fun oublier() = store.oublier()
 
     suspend fun solde(id: String, pin: String): Result<String> = withContext(Dispatchers.IO) {

@@ -87,6 +87,94 @@ class CartRepo(private val store: StoreApi, private val client: OkHttpClient) {
     @Serializable
     private data class CartCount(val items_count: Int = 0)
 
+    /** Contenu du panier : lignes (nom, quantité, total) + total, montants en centimes. */
+    suspend fun contenu(): Panier = withContext(Dispatchers.IO) {
+        val resp = store.getCart()
+        if (!resp.isSuccessful) throw IllegalStateException("Panier injoignable.")
+        val o = org.json.JSONObject(resp.body()!!.string())
+        val lignes = mutableListOf<LignePanier>()
+        val items = o.optJSONArray("items") ?: org.json.JSONArray()
+        for (i in 0 until items.length()) {
+            val it = items.getJSONObject(i)
+            lignes.add(
+                LignePanier(
+                    name = it.optString("name"),
+                    quantity = it.optInt("quantity"),
+                    ligneTotal = it.optJSONObject("totals")?.optString("line_total", "0") ?: "0",
+                ),
+            )
+        }
+        Panier(lignes, o.optJSONObject("totals")?.optString("total_price", "0") ?: "0")
+    }
+
+    /**
+     * Checkout 100% natif : lit le formulaire de /commander/ (champs pré-remplis
+     * quand connecté), coche les CGV, choisit Izly et poste sur ?wc-ajax=checkout.
+     * Retourne l'URL de paiement (page Izly Authorize) en cas de succès.
+     */
+    suspend fun commander(): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
+        try {
+            val html = get("${BASE}commander/")
+            if (html.contains("woocommerce-form-login") && !html.contains("form.checkout")) {
+                return@withContext Result.failure(IllegalStateException("Connecte-toi dans l'onglet Compte."))
+            }
+            val doc = org.jsoup.Jsoup.parse(html, "${BASE}commander/")
+            val form = doc.selectFirst("form.checkout")
+                ?: return@withContext Result.failure(
+                    IllegalStateException("Checkout introuvable (panier vide ?)."),
+                )
+            val methodes = form.select("input[name=payment_method]").eachAttr("value")
+            val methode = if ("izlyvl" in methodes) "izlyvl" else methodes.firstOrNull()
+                ?: return@withContext Result.failure(IllegalStateException("Paiement Izly indisponible."))
+            val corps = FormBody.Builder()
+            for (el in form.select("input[name], select[name], textarea[name]")) {
+                val nom = el.attr("name")
+                if (nom.isBlank() || nom == "terms" || nom == "payment_method") continue
+                val type = el.attr("type").lowercase()
+                if (type == "checkbox" || type == "radio") {
+                    if (el.hasAttr("checked")) corps.add(nom, el.attr("value").ifBlank { "1" })
+                    continue
+                }
+                if (type in listOf("submit", "button", "file", "image")) continue
+                val valeur = if (el.tagName() == "select") {
+                    el.selectFirst("option[selected]")?.attr("value")
+                        ?: el.selectFirst("option")?.attr("value").orEmpty()
+                } else el.attr("value")
+                corps.add(nom, valeur)
+            }
+            corps.add("terms", "on")
+            corps.add("terms-field", "1")
+            corps.add("payment_method", methode)
+            val req = Request.Builder().url("${BASE}?wc-ajax=checkout").post(corps.build()).build()
+            val rep = client.newCall(req).execute().use { it.body!!.string() }
+            val o = org.json.JSONObject(rep)
+            if (o.optString("result") == "success") {
+                val redirect = o.optString("redirect")
+                if (redirect.isBlank()) {
+                    return@withContext Result.failure(IllegalStateException("Checkout sans redirection."))
+                }
+                Result.success(redirect to methode)
+            } else {
+                val msg = org.jsoup.Jsoup.parse(o.optString("messages")).text().take(220)
+                Result.failure(IllegalStateException(msg.ifBlank { "Checkout refusé." }))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun get(url: String): String {
+        val req = Request.Builder().url(url).get().build()
+        return client.newCall(req).execute().use {
+            if (!it.isSuccessful) throw IllegalStateException("Boutique injoignable (${it.code}).")
+            it.body!!.string()
+        }
+    }
+
+    /** Valide un paiement Izly à partir de son URL d'autorisation. */
+    suspend fun payerIzly(urlAutorisation: String, izlyId: String, izlyPin: String): Result<String> =
+        IzlyPay(client).autoriser(urlAutorisation, izlyId, izlyPin)
+
     suspend fun ajouterProduit(
         product: StoreProduct,
         choixMenu: String,

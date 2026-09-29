@@ -27,12 +27,14 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -53,8 +55,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import fr.croustille.data.CartRepo
+import fr.croustille.data.IzlyRepo
+import fr.croustille.data.Panier
 import fr.croustille.data.StoreApi
 import fr.croustille.data.StoreProduct
+import fr.croustille.data.centimesVersEuros
 import fr.croustille.data.choixDessert
 import fr.croustille.data.choixMenu
 import fr.croustille.data.prixAffiche
@@ -66,17 +71,33 @@ import kotlinx.coroutines.launch
 fun ShopScreen(
     store: StoreApi,
     cart: CartRepo,
+    izly: IzlyRepo,
     commandable: Boolean,
     onCompte: () -> Unit,
     onPanierWeb: () -> Unit,
+    onCommandePayee: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var products by remember { mutableStateOf<List<StoreProduct>?>(null) }
     var fiche by remember { mutableStateOf<StoreProduct?>(null) }
+    var panier by remember { mutableStateOf<Panier?>(null) }
+    var urlPaiement by remember { mutableStateOf<String?>(null) }
+    var actionBusy by remember { mutableStateOf(false) }
     val snack = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    suspend fun chargerPanier() {
+        panier = try {
+            cart.contenu().takeIf { it.items.isNotEmpty() }
+        } catch (e: Exception) {
+            null
+        }
+    }
+    suspend fun dire(msg: String) { snack.showSnackbar(msg) }
+
     LaunchedEffect(Unit) {
         products = try { store.products() } catch (e: Exception) { emptyList() }
+        chargerPanier()
     }
 
     Scaffold(modifier, snackbarHost = { SnackbarHost(snack) }) { pad ->
@@ -108,15 +129,49 @@ fun ShopScreen(
             }
             if (products == null) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) { LoadingIndicator() }
-            } else if (products!!.isEmpty()) {
-                Box(Modifier.fillMaxSize().padding(24.dp), Alignment.Center) {
-                    Text("Boutique vide : les réservations sont passées, reviens plus tard (avant 8h00).", style = MaterialTheme.typography.bodyMedium)
-                }
             } else {
                 LazyColumn(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
+                    panier?.let { p ->
+                        item {
+                            CartePanier(
+                                panier = p,
+                                busy = actionBusy,
+                                onPayer = {
+                                    val creds = izly.lireIdentifiants()
+                                    if (creds == null) {
+                                        scope.launch {
+                                            snack.showSnackbar("Lie ton compte Izly dans l'onglet Compte.")
+                                            onCompte()
+                                        }
+                                        return@CartePanier
+                                    }
+                                    actionBusy = true
+                                    scope.launch {
+                                        val r = cart.commander()
+                                        if (r.isFailure) {
+                                            actionBusy = false
+                                            scope.launch { dire(r.exceptionOrNull()?.message ?: "Checkout impossible.") }
+                                        } else {
+                                            urlPaiement = r.getOrNull()!!.first
+                                        }
+                                    }
+                                },
+                                onVoirSite = onPanierWeb,
+                            )
+                        }
+                    }
+                    if (products!!.isEmpty()) {
+                        item {
+                            Text(
+                                "Boutique vide : les réservations sont passées, reviens plus tard (avant 8h00).",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(8.dp),
+                            )
+                        }
+                    }
                     itemsIndexed(products!!, key = { _, p -> p.id }) { i, p ->
                         StaggeredIn(i) { ProductCard(p, onChoisir = { fiche = p }) }
                     }
@@ -131,12 +186,147 @@ fun ShopScreen(
             onFermer = { fiche = null },
             onAjoute = { msg, versPanier ->
                 scope.launch {
+                    chargerPanier()
                     val r = snack.showSnackbar(msg, actionLabel = if (versPanier) "Panier web" else null)
                     if (r == SnackbarResult.ActionPerformed) onPanierWeb()
                 }
             },
             cart = cart,
         )
+    }
+
+    urlPaiement?.let { url ->
+        SheetPaiement(
+            montant = panier?.let { centimesVersEuros(it.total) } ?: "",
+            busy = actionBusy,
+            onFermer = { if (!actionBusy) urlPaiement = null },
+            onConfirmer = {
+                val creds = izly.lireIdentifiants()
+                if (creds == null) {
+                    urlPaiement = null
+                    onCompte()
+                    return@SheetPaiement
+                }
+                actionBusy = true
+                scope.launch {
+                    val r = cart.payerIzly(url, creds.first, creds.second)
+                    actionBusy = false
+                    if (r.isSuccess) {
+                        urlPaiement = null
+                        chargerPanier()
+                        scope.launch { dire("Payé ! Retrouve ton numéro dans l'onglet Commandes.") }
+                        onCommandePayee()
+                    } else {
+                        urlPaiement = null
+                        scope.launch {
+                            val choix = snack.showSnackbar(
+                                r.exceptionOrNull()?.message ?: "Paiement refusé.",
+                                actionLabel = "Site web",
+                            )
+                            if (choix == SnackbarResult.ActionPerformed) onPanierWeb()
+                        }
+                    }
+                }
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CartePanier(
+    panier: Panier,
+    busy: Boolean,
+    onPayer: () -> Unit,
+    onVoirSite: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(MaterialTheme.colorScheme.primaryContainer),
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.ShoppingBag, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Panier (${panier.items.sumOf { it.quantity }})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (busy) CircularProgressIndicator(modifier = Modifier.size(20.dp))
+            }
+            panier.items.forEach { l ->
+                Row {
+                    Text(
+                        "${l.name} × ${l.quantity}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        centimesVersEuros(l.ligneTotal),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Row {
+                Text(
+                    "Total",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    centimesVersEuros(panier.total),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Black,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Text(
+                "1 repas midi + 1 repas soir max (pas deux midis).",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onPayer, enabled = !busy, modifier = Modifier.weight(1f)) {
+                    Text("Payer ${centimesVersEuros(panier.total)}")
+                }
+                OutlinedButton(onClick = onVoirSite, enabled = !busy) { Text("Site") }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SheetPaiement(
+    montant: String,
+    busy: Boolean,
+    onFermer: () -> Unit,
+    onConfirmer: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onFermer) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Payer avec Izly ?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(
+                "Montant : $montant. Croustille valide la commande (CGV cochées) puis paie avec ton compte Izly mémorisé.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Button(onClick = onConfirmer, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                if (busy) CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                else Text("Valider et payer $montant")
+            }
+            OutlinedButton(onClick = onFermer, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                Text("Annuler")
+            }
+            Spacer(Modifier.height(16.dp))
+        }
     }
 }
 

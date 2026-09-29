@@ -136,9 +136,11 @@ fun MainScreen(
             1 -> ShopScreen(
                 store = store,
                 cart = cart,
+                izly = izly,
                 commandable = commandable,
                 onCompte = { onglet = 3 },
                 onPanierWeb = { rootNav.navigate("paiement") },
+                onCommandePayee = { onglet = 2 },
                 modifier = mod,
             )
             2 -> OrdersScreen(

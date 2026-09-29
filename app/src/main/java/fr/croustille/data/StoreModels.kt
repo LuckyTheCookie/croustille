@@ -34,6 +34,17 @@ fun StoreProduct.prixAffiche(): String {
     return "${centimes / 100},${(centimes % 100).toString().padStart(2, '0')} ${prices.currency_symbol}"
 }
 
+/** "100" (centimes) -> "1,00 €". */
+fun centimesVersEuros(centimes: String): String {
+    val c = centimes.toLongOrNull() ?: 0
+    return "${c / 100},${(c % 100).toString().padStart(2, '0')} €"
+}
+
+/** Contenu du panier (montants en centimes, format Store API). */
+data class LignePanier(val name: String = "", val quantity: Int = 0, val ligneTotal: String = "0")
+
+data class Panier(val items: List<LignePanier> = emptyList(), val total: String = "0")
+
 fun StoreProduct.choixMenu(): List<String> =
     attributes.firstOrNull { it.name == "Choix menu" }?.terms?.map { it.name } ?: emptyList()
 
