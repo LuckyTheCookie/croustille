@@ -22,11 +22,8 @@ class MainActivity : ComponentActivity() {
 
     private fun afficher() {
         val prefs = Prefs(applicationContext)
-        val i = intent
         // Les notifs (ex: suivi du retrait) peuvent demander un onglet précis.
-        val onglet = i?.getIntExtra("onglet", 0) ?: 0
-        // Lien d'activation Izly reçu par SMS.
-        val activation = i?.dataString?.takeIf { "/tools/Activation" in it }
-        setContent { CroustilleTheme { App(prefs, onglet, activation) } }
+        val onglet = intent?.getIntExtra("onglet", 0) ?: 0
+        setContent { CroustilleTheme { App(prefs, onglet) } }
     }
 }

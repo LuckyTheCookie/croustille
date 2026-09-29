@@ -26,9 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Logout
-import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
@@ -240,38 +238,34 @@ private fun LigneStatut(ok: Boolean, texte: String) {
 }
 
 // ---------------------------------------------------------------------------
-// Izly : formulaire -> SMS -> solde (API REST officielle détournée façon Papillon)
 // ---------------------------------------------------------------------------
-private const val ETAPE_FORM = 0
-private const val ETAPE_SMS = 1
-private const val ETAPE_SOLDE = 2
-
+// Izly : connexion directe web (sans SMS) -> solde.
+// ---------------------------------------------------------------------------
 @Composable
 private fun CarteIzly(izly: IzlyRepo) {
     var id by remember { mutableStateOf("") }
     var pin by remember { mutableStateOf("") }
-    var lienColle by remember { mutableStateOf("") }
-    var etape by remember { mutableStateOf(if (izly.aUneSession()) ETAPE_SOLDE else ETAPE_FORM) }
-    var solde by remember { mutableStateOf<Double?>(null) }
+    var solde by remember { mutableStateOf<String?>(null) }
     var erreur by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    val lie = izly.aDesIdentifiants()
     val scope = rememberCoroutineScope()
 
-    suspend fun chargerSolde() {
+    suspend fun charger(nouvelId: String, nouveauPin: String) {
         busy = true
         erreur = null
-        val r = izly.solde()
+        val r = izly.solde(nouvelId, nouveauPin)
         busy = false
-        if (r.isSuccess) {
-            solde = r.getOrNull()
-            etape = ETAPE_SOLDE
-        } else {
-            erreur = r.exceptionOrNull()?.message
-            if (r.exceptionOrNull()?.message?.contains("reconnecte") == true) etape = ETAPE_FORM
-        }
+        if (r.isSuccess) solde = r.getOrNull()
+        else erreur = r.exceptionOrNull()?.message
     }
+    // Auto-refresh silencieux si identifiants mémorisés.
     LaunchedEffect(Unit) {
-        if (etape == ETAPE_SOLDE) chargerSolde()
+        if (lie) {
+            val r = izly.soldeSauve()
+            if (r?.isSuccess == true) solde = r.getOrNull()
+            else erreur = r?.exceptionOrNull()?.message
+        }
     }
 
     Card(
@@ -291,124 +285,57 @@ private fun CarteIzly(izly: IzlyRepo) {
                 Column(Modifier.weight(1f)) {
                     Text("Solde Izly", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
-                        when (etape) {
-                            ETAPE_SOLDE -> "Compte lié"
-                            ETAPE_SMS -> "Activation en cours"
-                            else -> "Non lié"
-                        },
+                        if (solde != null) "Compte lié" else "Recharge et paiements CROUS",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (etape == ETAPE_SOLDE) {
-                    IconButton(onClick = { scope.launch { chargerSolde() } }) {
+                if (solde != null) {
+                    IconButton(onClick = {
+                        scope.launch {
+                            busy = true
+                            val r = izly.soldeSauve()
+                            busy = false
+                            if (r?.isSuccess == true) solde = r.getOrNull()
+                            else erreur = r?.exceptionOrNull()?.message
+                        }
+                    }) {
                         if (busy) CircularProgressIndicator(modifier = Modifier.size(20.dp))
                         else Icon(Icons.Default.Refresh, "Actualiser")
                     }
                 }
             }
 
-            when (etape) {
-                ETAPE_SOLDE -> {
-                    if (solde != null) {
-                        Text(
-                            "%.2f €".format(solde),
-                            style = MaterialTheme.typography.displaySmall,
-                            fontWeight = FontWeight.Black,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    } else if (busy) {
-                        CircularProgressIndicator()
-                    }
-                    erreur?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-                    TextButton(onClick = {
-                        izly.oublier()
-                        solde = null
-                        etape = ETAPE_FORM
-                        id = ""
-                    }) { Text("Dissocier mon compte Izly") }
+            if (solde != null) {
+                Text(solde!!, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
+                TextButton(onClick = {
+                    izly.oublier()
+                    solde = null
+                    erreur = null
+                    id = ""
+                }) { Text("Oublier mes identifiants Izly") }
+            } else {
+                OutlinedTextField(
+                    id, { id = it }, label = { Text("E-mail ou mobile Izly") },
+                    singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    pin, { pin = it }, label = { Text("Code secret (6 chiffres)") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+                )
+                Button(
+                    onClick = { scope.launch { charger(id.trim(), pin.trim()) } },
+                    enabled = !busy && id.isNotBlank() && pin.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (busy) "Connexion…" else "Voir mon solde")
                 }
-                ETAPE_SMS -> {
-                    LigneStatut(ok = false, texte = "SMS envoyé")
-                    Text(
-                        "Izly t'a envoyé un SMS avec un lien d'activation. Touche-le : il ouvrira directement Croustille. Sinon, colle-le ci-dessous.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    OutlinedTextField(
-                        lienColle, { lienColle = it }, label = { Text("Lien reçu par SMS") },
-                        singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    busy = true
-                                    erreur = null
-                                    val r = izly.activer(lienColle.trim())
-                                    busy = false
-                                    if (r.isSuccess) {
-                                        lienColle = ""
-                                        chargerSolde()
-                                    } else erreur = r.exceptionOrNull()?.message
-                                }
-                            },
-                            enabled = !busy && lienColle.isNotBlank(),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Icon(Icons.Default.ContentPaste, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(if (busy) "…" else "Activer")
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                scope.launch {
-                                    busy = true
-                                    val r = izly.login(id.trim(), pin.trim())
-                                    busy = false
-                                    if (r.isFailure) erreur = r.exceptionOrNull()?.message
-                                }
-                            },
-                            enabled = !busy,
-                        ) { Text("Renvoyer") }
-                    }
-                    erreur?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-                    TextButton(onClick = { etape = ETAPE_FORM }) { Text("Changer d'identifiants") }
-                }
-                else -> {
-                    OutlinedTextField(
-                        id, { id = it }, label = { Text("E-mail ou mobile Izly") },
-                        singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        pin, { pin = it }, label = { Text("Code secret (6 chiffres)") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
-                    )
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                busy = true
-                                erreur = null
-                                val r = izly.login(id.trim(), pin.trim())
-                                busy = false
-                                if (r.isSuccess) {
-                                    etape = ETAPE_SMS
-                                } else erreur = r.exceptionOrNull()?.message
-                            }
-                        },
-                        enabled = !busy && id.isNotBlank() && pin.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(Icons.Default.Mail, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (busy) "Envoi…" else "Recevoir le SMS d'activation")
-                    }
-                    erreur?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-                    Text(
-                        "Première liaison uniquement : Izly vérifie ce nouvel appareil par SMS (comme Papillon). Ensuite, plus besoin de code.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                erreur?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                Text(
+                    "Connexion directe, sans SMS. Identifiants chiffrés sur l'appareil.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
