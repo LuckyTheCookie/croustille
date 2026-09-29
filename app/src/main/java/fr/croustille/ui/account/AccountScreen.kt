@@ -164,6 +164,20 @@ private fun SessionCrous(auth: WpAuth, onPaiement: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    // Si la session a expiré mais que les identifiants sont mémorisés, on reconnecte tout seul.
+    LaunchedEffect(Unit) {
+        if (!connecte) {
+            try {
+                if (auth.assurerSession()) {
+                    connecte = true
+                    msg = "Reconnecté automatiquement — bon retour !"
+                }
+            } catch (e: Exception) {
+                // Reste en mode déconnecté.
+            }
+        }
+    }
+
     Card(
         colors = CardDefaults.cardColors(
             if (connecte) MaterialTheme.colorScheme.tertiaryContainer
@@ -195,7 +209,7 @@ private fun SessionCrous(auth: WpAuth, onPaiement: () -> Unit) {
                                 if (auth.login(log, pwd)) {
                                     connecte = true
                                     pwd = ""
-                                    "Session active — tes commandes se synchronisent toutes seules."
+                                    "Session active — reconnexion auto si la boutique te déconnecte."
                                 } else "Identifiants refusés — réessaie."
                             } catch (e: Exception) {
                                 "Erreur réseau : ${e.message}"
@@ -207,6 +221,11 @@ private fun SessionCrous(auth: WpAuth, onPaiement: () -> Unit) {
                 ) {
                     Text(if (busy) "Connexion…" else "Se connecter")
                 }
+                Text(
+                    "Mot de passe chiffré sur l'appareil : reconnexion automatique.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             } else {
                 Button(onClick = onPaiement, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.ShoppingBag, null, modifier = Modifier.size(18.dp))

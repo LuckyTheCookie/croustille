@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -18,6 +19,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import fr.croustille.data.CartRepo
 import fr.croustille.data.CookieStore
+import fr.croustille.data.CrousStore
 import fr.croustille.data.CroustillantApi
 import fr.croustille.data.IzlyRepo
 import fr.croustille.data.IzlyStore
@@ -43,11 +45,20 @@ fun App(prefs: Prefs, ongletInitial: Int = 0) {
     val client = remember { OkHttpClient.Builder().cookieJar(jar).build() }
     val api = remember { CroustillantApi.create() }
     val store = remember { StoreApi.create(client) }
-    val auth = remember { WpAuth(client, jar) }
-    val cart = remember { CartRepo(store, client) }
-    val orders = remember { OrdersRepo(client) }
+    val auth = remember { WpAuth(client, jar, CrousStore(ctx)) }
+    val cart = remember { CartRepo(store, client, auth::assurerSession) }
+    val orders = remember { OrdersRepo(client, auth::assurerSession) }
     val izlyStore = remember { IzlyStore(ctx) }
     val izly = remember { IzlyRepo(OkHttpClient.Builder().cookieJar(JarMemoire()).build(), izlyStore) }
+
+    // Reconnexion silencieuse au lancement (la boutique déconnecte souvent).
+    LaunchedEffect(Unit) {
+        try {
+            auth.assurerSession()
+        } catch (e: Exception) {
+            // Tant pis : l'utilisateur se reconnectera via l'onglet Compte.
+        }
+    }
 
     val done by prefs.onboardingDone.collectAsState(initial = null)
     val selection by prefs.restoCode.collectAsState(initial = -1)

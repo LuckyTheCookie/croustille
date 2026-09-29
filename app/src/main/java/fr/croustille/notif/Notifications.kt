@@ -6,7 +6,9 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import androidx.core.app.NotificationCompat
 import fr.croustille.MainActivity
+import fr.croustille.R
 
 private const val CANAL = "croustille_rappels"
 private const val CANAL_RETRAIT = "croustille_retrait"
@@ -96,6 +98,46 @@ fun notifierCommandeDetectee(ctx: Context, numero: String, heure: String) {
 }
 
 private const val ID_RETRAIT = 5
+private const val ECHELLE = 1000
+private const val TERRACOTTA = 0xFFA63A00L
+private const val GRIS = 0xFFB0AA9FL
+
+/** Construit la notif de suivi façon Reef : ProgressStyle + ongoing + CATEGORY_PROGRESS. */
+fun construireNotifRetrait(
+    ctx: Context,
+    numero: String,
+    finTexte: String,
+    avancement: Int, // 0..100
+    finMillis: Long,
+): Notification {
+    canaux(ctx)
+    val ecoule = (avancement.coerceIn(0, 100) * ECHELLE / 100)
+    val style = NotificationCompat.ProgressStyle()
+        .setStyledByProgress(false)
+        .setProgress(ecoule)
+        .addProgressSegment(
+            NotificationCompat.ProgressStyle.Segment(ecoule).setColor(TERRACOTTA.toInt()),
+        )
+        .addProgressSegment(
+            NotificationCompat.ProgressStyle.Segment(ECHELLE - ecoule).setColor(GRIS.toInt()),
+        )
+        .addProgressPoint(
+            NotificationCompat.ProgressStyle.Point(ECHELLE).setColor(0xFFFFFFFF.toInt()),
+        )
+    return NotificationCompat.Builder(ctx, CANAL_RETRAIT)
+        .setSmallIcon(R.drawable.ic_launcher_foreground)
+        .setContentTitle("Retrait en cours · $numero")
+        .setContentText("Montre ton numéro au comptoir · fin à $finTexte")
+        .setContentIntent(versCommandes(ctx, 5))
+        .setOngoing(true)
+        .setOnlyAlertOnce(true)
+        .setCategory(Notification.CATEGORY_PROGRESS)
+        .setShowWhen(true)
+        .setWhen(finMillis)
+        .setStyle(style)
+        .setRequestPromotedOngoing(true)
+        .build()
+}
 
 /** Notif persistante avec barre de progression jusqu'à la fin du retrait. */
 fun notifierRetrait(
@@ -103,21 +145,10 @@ fun notifierRetrait(
     numero: String,
     finTexte: String,
     avancement: Int, // 0..100
+    finMillis: Long,
 ) {
-    canaux(ctx)
     val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
-    nm.notify(
-        ID_RETRAIT,
-        Notification.Builder(ctx, CANAL_RETRAIT)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("Retrait en cours · $numero")
-            .setContentText("Montre ton numéro au comptoir · fin à $finTexte")
-            .setContentIntent(versCommandes(ctx, 5))
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setProgress(100, avancement, false)
-            .build(),
-    )
+    nm.notify(ID_RETRAIT, construireNotifRetrait(ctx, numero, finTexte, avancement, finMillis))
 }
 
 fun notifierBonAppetit(ctx: Context, numero: String) {

@@ -54,6 +54,7 @@ dependencies {
     implementation(libs.coil.network)
     implementation(libs.datastore)
     implementation(libs.security.crypto)
+    implementation(libs.core.ktx)
     implementation(libs.work.runtime)
     implementation(libs.jsoup)
 }

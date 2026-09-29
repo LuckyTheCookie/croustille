@@ -1,8 +1,10 @@
 package fr.croustille.notif
 
 import android.content.Context
+import android.os.Build
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
+import androidx.work.ForegroundInfo
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -33,6 +35,17 @@ private val PARIS = ZoneId.of("Europe/Paris")
 private fun estWeekend(): Boolean {
     val j = LocalDate.now(PARIS).dayOfWeek
     return j == DayOfWeek.SATURDAY || j == DayOfWeek.SUNDAY
+}
+
+/** (avancement 0..100, "13h30", fin en millis) pour le suivi du retrait. */
+private fun etatSuivi(debut: Int, fin: Int): Triple<Int, String, Long> {
+    val z = ZonedDateTime.now(PARIS)
+    val maintenant = z.hour * 60 + z.minute
+    val av = ((maintenant - debut) * 100 / (fin - debut).coerceAtLeast(1)).coerceIn(0, 100)
+    val finTexte = "%dh%02d".format(fin / 60, fin % 60)
+    val finMillis = z.withHour(fin / 60).withMinute(fin % 60).withSecond(0).withNano(0)
+        .toInstant().toEpochMilli()
+    return Triple(av, finTexte, finMillis)
 }
 
 /** Rappel quotidien : le repas du lendemain est dispo à la commande (lun–ven). */
@@ -182,7 +195,25 @@ class RdvWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
 
 /** Suivi du retrait : notif persistante avec barre de progression, toutes les 15 min. */
 class PickupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        val numero = inputData.getString("numero") ?: "?"
+        val debut = inputData.getInt("debut", 11 * 60 + 30)
+        val fin = inputData.getInt("fin", 13 * 60 + 30)
+        val (av, finTexte, finMillis) = etatSuivi(debut, fin)
+        val notif = construireNotifRetrait(applicationContext, numero, finTexte, av, finMillis)
+        return if (Build.VERSION.SDK_INT >= 29) {
+            ForegroundInfo(
+                5, notif,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        } else {
+            ForegroundInfo(5, notif)
+        }
+    }
+
     override suspend fun doWork(): Result {
+        setForeground(getForegroundInfo())
         val numero = inputData.getString("numero") ?: return Result.success()
         val debut = inputData.getInt("debut", 11 * 60 + 30)
         val fin = inputData.getInt("fin", 13 * 60 + 30)
@@ -193,13 +224,8 @@ class PickupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             Glyph.miroir(applicationContext, -1) // éteint
             return Result.success()
         }
-        val avancement = ((maintenant - debut) * 100 / (fin - debut).coerceAtLeast(1)).coerceIn(0, 100)
-        notifierRetrait(
-            applicationContext,
-            numero,
-            "%dh%02d".format(fin / 60, fin % 60),
-            avancement,
-        )
+        val (avancement, finTexte, finMillis) = etatSuivi(debut, fin)
+        notifierRetrait(applicationContext, numero, finTexte, avancement, finMillis)
         Glyph.miroir(applicationContext, avancement)
         // Prochain point dans 15 min (ou à la fin).
         val prochainDelai = (fin - maintenant).coerceAtMost(15).coerceAtLeast(1)

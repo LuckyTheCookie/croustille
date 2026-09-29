@@ -51,7 +51,11 @@ fun StoreProduct.variationPour(choixMenu: String): Long? =
  * Le CookieJar persistant conserve wordpress_logged_in_* (chiffré).
  * Seul le paiement Izly reste en WebView (redirection 3DS).
  */
-class WpAuth(private val client: OkHttpClient, private val jar: PersistentCookieJar) {
+class WpAuth(
+    private val client: OkHttpClient,
+    private val jar: PersistentCookieJar,
+    private val crous: CrousStore? = null,
+) {
     suspend fun login(log: String, pwd: String): Boolean = withContext(Dispatchers.IO) {
         val body = FormBody.Builder()
             .add("log", log)
@@ -62,14 +66,30 @@ class WpAuth(private val client: OkHttpClient, private val jar: PersistentCookie
             .build()
         val req = Request.Builder().url("${BASE}wp-login.php").post(body).build()
         client.newCall(req).execute().use { resp ->
-            jar.loadForRequest(req.url).any { it.name.startsWith("wordpress_logged_in_") } &&
+            val ok = jar.loadForRequest(req.url).any { it.name.startsWith("wordpress_logged_in_") } &&
                 resp.code in 200..399
+            if (ok) crous?.sauver(log, pwd)
+            ok
         }
     }
 
     fun hasSession(): Boolean = jar.hasSession()
 
-    fun logout() = jar.clearAll()
+    /** Reconnexion silencieuse avec les identifiants mémorisés (la boutique déconnecte souvent). */
+    suspend fun assurerSession(): Boolean {
+        if (hasSession()) return true
+        val (id, mdp) = crous?.lire() ?: return false
+        return try {
+            login(id, mdp)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun logout() {
+        jar.clearAll()
+        crous?.oublier()
+    }
 }
 
 /** Panier via le endpoint classique Woo (identique au navigateur) :
@@ -78,7 +98,11 @@ class WpAuth(private val client: OkHttpClient, private val jar: PersistentCookie
  *  ("Zone de récupération doit être rempli"). La réponse ajax contient un
  *  `error:true` trompeur : on vérifie l'ajout via le compteur du panier.
  */
-class CartRepo(private val store: StoreApi, private val client: OkHttpClient) {
+class CartRepo(
+    private val store: StoreApi,
+    private val client: OkHttpClient,
+    private val assurerSession: suspend () -> Boolean = { true },
+) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     @Serializable
@@ -114,6 +138,9 @@ class CartRepo(private val store: StoreApi, private val client: OkHttpClient) {
      */
     suspend fun commander(): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
         try {
+            if (!assurerSession()) {
+                return@withContext Result.failure(IllegalStateException("Session expirée, reconnecte-toi."))
+            }
             val html = get("${BASE}commander/")
             if (html.contains("woocommerce-form-login") && !html.contains("form.checkout")) {
                 return@withContext Result.failure(IllegalStateException("Connecte-toi dans l'onglet Compte."))
@@ -182,6 +209,9 @@ class CartRepo(private val store: StoreApi, private val client: OkHttpClient) {
         choix2: String,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (!assurerSession()) {
+                return@withContext Result.failure(IllegalStateException("Session expirée, reconnecte-toi."))
+            }
             val variationId = product.variations.firstOrNull { v ->
                 v.attributes.any { it.name == "Choix menu" && it.value == choixMenu }
             }?.id ?: return@withContext Result.failure(IllegalStateException("Formule introuvable."))

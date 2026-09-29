@@ -39,6 +39,30 @@ class CookieStore(ctx: Context) {
         load(BASE_URL.toHttpUrl()).any { it.name.startsWith("wordpress_logged_in_") }
 }
 
+/** Identifiants CrousAndGo chiffrés (reconnexion automatique silencieuse). */
+class CrousStore(ctx: Context) {
+    private val sp: SharedPreferences = EncryptedSharedPreferences.create(
+        ctx.applicationContext,
+        "crous",
+        MasterKey.Builder(ctx.applicationContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+    )
+
+    fun lire(): Pair<String, String>? {
+        val id = sp.getString("id", null)
+        val mdp = sp.getString("mdp", null)
+        return if (id.isNullOrBlank() || mdp.isNullOrBlank()) null else id to mdp
+    }
+
+    fun sauver(id: String, mdp: String) = sp.edit {
+        putString("id", id)
+        putString("mdp", mdp)
+    }
+
+    fun oublier() = sp.edit { clear() }
+}
+
 /** CookieJar mémoire + persistance chiffrée : le login survit au redémarrage. */
 class PersistentCookieJar(private val store: CookieStore) : CookieJar {
     private val memory = mutableMapOf<String, List<Cookie>>()

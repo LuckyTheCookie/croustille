@@ -58,13 +58,29 @@ fun Retrait.creneauMinutes(): Pair<Int, Int>? = try {
 class PasConnecte : IllegalStateException("Connecte-toi dans l'onglet Compte pour voir tes commandes.")
 
 /** Lit "Mes commandes" WooCommerce avec la session de l'app (sans WebView). */
-class OrdersRepo(private val client: OkHttpClient) {
+class OrdersRepo(
+    private val client: OkHttpClient,
+    private val assurerSession: suspend () -> Boolean = { true },
+) {
 
     suspend fun commandes(): List<Commande> = withContext(Dispatchers.IO) {
+        try {
+            commandesBrut()
+        } catch (e: PasConnecte) {
+            if (!assurerSession()) throw e
+            try {
+                commandesBrut()
+            } catch (e2: PasConnecte) {
+                throw e2
+            }
+        }
+    }
+
+    private fun commandesBrut(): List<Commande> {
         val html = get("${COMPTE}orders/")
         val doc = Jsoup.parse(html, COMPTE)
         if (doc.selectFirst("form.woocommerce-form-login, form.login") != null) throw PasConnecte()
-        doc.select("table.woocommerce-orders-table tbody tr").mapNotNull { tr ->
+        return doc.select("table.woocommerce-orders-table tbody tr").mapNotNull { tr ->
             val lien = tr.selectFirst(".woocommerce-orders-table__cell-order-number a") ?: return@mapNotNull null
             Commande(
                 numero = lien.text().trim(),
@@ -77,10 +93,19 @@ class OrdersRepo(private val client: OkHttpClient) {
     }
 
     suspend fun detail(commande: Commande): List<LigneCommande> = withContext(Dispatchers.IO) {
+        try {
+            detailBrut(commande)
+        } catch (e: PasConnecte) {
+            if (!assurerSession()) throw e
+            detailBrut(commande)
+        }
+    }
+
+    private fun detailBrut(commande: Commande): List<LigneCommande> {
         val html = get(commande.lienDetail)
         val doc = Jsoup.parse(html, COMPTE)
         if (doc.selectFirst("form.woocommerce-form-login, form.login") != null) throw PasConnecte()
-        doc.select("table.woocommerce-table--order-details tbody tr.woocommerce-table__line-item").map { tr ->
+        return doc.select("table.woocommerce-table--order-details tbody tr.woocommerce-table__line-item").map { tr ->
             val nom = tr.selectFirst(".woocommerce-table__product-name")?.ownText()?.trim().orEmpty()
             val qte = tr.selectFirst(".product-quantity")?.text()?.trim().orEmpty()
             val meta = tr.select(".wc-item-meta li").map { li ->
