@@ -48,7 +48,8 @@ fun App(prefs: Prefs, ongletInitial: Int = 0, activationIzly: String? = null) {
     val auth = remember { WpAuth(client, jar) }
     val cart = remember { CartRepo(store, client) }
     val orders = remember { OrdersRepo(client) }
-    val izly = remember { IzlyRepo(OkHttpClient.Builder().build(), IzlyStore(ctx)) }
+    val izlyStore = remember { IzlyStore(ctx) }
+    val izly = remember { IzlyRepo(OkHttpClient.Builder().build(), izlyStore) }
 
     val done by prefs.onboardingDone.collectAsState(initial = null)
     val selection by prefs.restoCode.collectAsState(initial = -1)
@@ -84,6 +85,6 @@ fun App(prefs: Prefs, ongletInitial: Int = 0, activationIzly: String? = null) {
         composable("main") {
             MainScreen(api, store, auth, cart, orders, izly, prefs, selection, nav, ongletInitial)
         }
-        composable("paiement") { PaiementScreen(jar) }
+        composable("paiement") { PaiementScreen(jar, client, izlyStore) }
     }
 }

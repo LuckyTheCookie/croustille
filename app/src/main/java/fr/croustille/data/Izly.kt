@@ -27,7 +27,7 @@ import android.util.Base64
 private const val SOAP_URL = "https://soap.izly.fr/Service.asmx"
 private const val REST = "https://rest.izly.fr/Service/PublicService.svc/rest/"
 private const val UA = "ksoap2-android/2.6.0+"
-private const val CLIENT_VERSION = "6.3"
+private const val CLIENT_VERSION = "8.0"
 private const val JSON_MT = "application/json"
 
 @Serializable
@@ -64,11 +64,27 @@ class IzlyStore(ctx: Context) {
 
     fun lireSecret(): String? = sp.getString("secret", null) ?: sp.getString("pin_temp", null)
 
-    fun sauverSecretTemporaire(pin: String) = sp.edit { putString("pin_temp", pin) }
+    /** Identifiants mémorisés (définitifs, sinon temporaires en cours d'activation). */
+    fun lireIdentifiants(): Pair<String, String>? {
+        val id = sp.getString("id", null) ?: sp.getString("id_temp", null)
+        val pin = sp.getString("secret", null) ?: sp.getString("pin_temp", null)
+        return if (id.isNullOrBlank() || pin.isNullOrBlank()) null else id to pin
+    }
 
-    fun promouvoirSecret(pin: String) = sp.edit {
-        putString("secret", pin)
-        remove("pin_temp")
+    fun sauverSecretTemporaire(id: String, pin: String) = sp.edit {
+        putString("id_temp", id)
+        putString("pin_temp", pin)
+    }
+
+    fun promouvoirSecret() {
+        val id = sp.getString("id_temp", null)
+        val pin = sp.getString("pin_temp", null)
+        sp.edit {
+            id?.let { putString("id", it) }
+            pin?.let { putString("secret", it) }
+            remove("id_temp")
+            remove("pin_temp")
+        }
     }
 
     fun oublier() = sp.edit { clear() }
@@ -94,7 +110,7 @@ class IzlyRepo(private val client: OkHttpClient, private val store: IzlyStore) {
             if ("UserData" !in resultat) {
                 return@withContext Result.failure(IllegalStateException("Réponse Izly inattendue."))
             }
-            store.sauverSecretTemporaire(pin)
+            store.sauverSecretTemporaire(id, pin)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -130,10 +146,10 @@ class IzlyRepo(private val client: OkHttpClient, private val store: IzlyStore) {
             if (session.accessToken.isBlank() || session.seed.isBlank()) {
                 return@withContext Result.failure(IllegalStateException("Activation incomplète."))
             }
-            val secret = store.lireSecret()
+            val secret = store.lireIdentifiants()?.second
                 ?: return@withContext Result.failure(IllegalStateException("Code secret perdu, recommence la connexion."))
             store.sauverSession(session)
-            store.promouvoirSecret(secret)
+            store.promouvoirSecret()
             Result.success(session)
         } catch (e: Exception) {
             Result.failure(e)

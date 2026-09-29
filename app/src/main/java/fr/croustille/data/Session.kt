@@ -63,6 +63,9 @@ class PersistentCookieJar(private val store: CookieStore) : CookieJar {
         store.clear()
     }
 
+    /** Injection externe (ex: cookies lus depuis la WebView). */
+    fun injecter(url: okhttp3.HttpUrl, cookies: List<Cookie>) = saveFromResponse(url, cookies)
+
     /** Tous les cookies valides pour une URL (pour les injecter dans la WebView). */
     fun cookiesFor(url: String): List<Cookie> = loadForRequest(url.toHttpUrl())
 
