@@ -75,6 +75,9 @@ class WpAuth(
 
     fun hasSession(): Boolean = jar.hasSession()
 
+    /** Identifiant mémorisé (affiché dans le profil, jamais le mot de passe). */
+    fun identifiant(): String? = crous?.lire()?.first
+
     /** Reconnexion silencieuse avec les identifiants mémorisés (la boutique déconnecte souvent). */
     suspend fun assurerSession(): Boolean {
         if (hasSession()) return true

@@ -83,34 +83,43 @@ fun AccountScreen(
     onPaiement: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var connecte by remember { mutableStateOf(auth.hasSession()) }
+    var crousId by remember { mutableStateOf(auth.identifiant()) }
+    var izlySolde by remember { mutableStateOf<String?>(null) }
+    val menuOn by prefs.menu13h.collectAsState(initial = false)
+    val stockOn by prefs.stockOn.collectAsState(initial = false)
+    val rdvOn by prefs.rdvRetrait.collectAsState(initial = false)
+    val nbRappels = listOf(menuOn, stockOn, rdvOn).count { it }
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(52.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(30.dp))
-                }
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text("Mon compte", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
-                    Text("Connexions et rappels", style = MaterialTheme.typography.bodySmall)
-                }
-            }
+            ProfilHeader(
+                crousId = crousId,
+                connecte = connecte,
+                izlyOk = izlySolde != null,
+                nbRappels = nbRappels,
+            )
         }
         item {
             Section("CrousAndGo") {
-                SessionCrous(auth = auth, onPaiement = onPaiement)
+                SessionCrous(
+                    auth = auth,
+                    connecte = connecte,
+                    onConnecte = { ok, id ->
+                        connecte = ok
+                        crousId = id
+                    },
+                    onPaiement = onPaiement,
+                )
             }
         }
         item {
             Section("Izly") {
-                CarteIzly(izly = izly)
+                CarteIzly(izly = izly, onSolde = { izlySolde = it })
             }
         }
         item {
@@ -119,16 +128,16 @@ fun AccountScreen(
             }
         }
         item {
+            Section("Labo & tests") {
+                ZoneTest(prefs = prefs)
+            }
+        }
+        item {
             Text(
                 "Astuce : touche le bandeau du restaurant dans l'onglet Menus pour changer de lieu.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        item {
-            Section("Zone test") {
-                ZoneTest(prefs = prefs)
-            }
         }
     }
 }
@@ -147,17 +156,74 @@ private fun Section(titre: String, contenu: @Composable () -> Unit) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Session CrousAndGo
-// ---------------------------------------------------------------------------
 @Composable
-private fun SessionCrous(auth: WpAuth, onPaiement: () -> Unit) {
+private fun ProfilHeader(crousId: String?, connecte: Boolean, izlyOk: Boolean, nbRappels: Int) {
+    val initiale = crousId?.trim()?.firstOrNull()?.uppercase() ?: "C"
+    Card(
+        colors = CardDefaults.cardColors(MaterialTheme.colorScheme.primaryContainer),
+        shape = RoundedCornerShape(28.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(60.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    initiale,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Black,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Mon compte", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
+                if (crousId != null) {
+                    Text(crousId, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Puce(ok = connecte, texte = "CROUS")
+                    Puce(ok = izlyOk, texte = "Izly")
+                    Puce(ok = true, texte = "Rappels $nbRappels/3")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Puce(ok: Boolean, texte: String) {
+    Box(
+        Modifier.clip(CircleShape)
+            .background(
+                if (ok) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+            )
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+    ) {
+        Text(
+            texte,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = if (ok) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun SessionCrous(
+    auth: WpAuth,
+    connecte: Boolean,
+    onConnecte: (Boolean, String?) -> Unit,
+    onPaiement: () -> Unit,
+) {
     var log by remember { mutableStateOf("") }
     var pwd by remember { mutableStateOf("") }
-    var connecte by remember { mutableStateOf(auth.hasSession()) }
-    var msg by remember {
+    var msg by remember(connecte) {
         mutableStateOf(
-            if (auth.hasSession()) "Session active — tes commandes se synchronisent toutes seules."
+            if (connecte) "Session active — tes commandes se synchronisent toutes seules."
             else "Connecte-toi pour commander et voir tes commandes.",
         )
     }
@@ -165,11 +231,11 @@ private fun SessionCrous(auth: WpAuth, onPaiement: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     // Si la session a expiré mais que les identifiants sont mémorisés, on reconnecte tout seul.
-    LaunchedEffect(Unit) {
+    LaunchedEffect(connecte) {
         if (!connecte) {
             try {
                 if (auth.assurerSession()) {
-                    connecte = true
+                    onConnecte(true, auth.identifiant())
                     msg = "Reconnecté automatiquement — bon retour !"
                 }
             } catch (e: Exception) {
@@ -203,18 +269,19 @@ private fun SessionCrous(auth: WpAuth, onPaiement: () -> Unit) {
                 )
                 Button(
                     onClick = {
-                        busy = true
                         scope.launch {
-                            msg = try {
-                                if (auth.login(log, pwd)) {
-                                    connecte = true
+                            busy = true
+                            try {
+                                msg = if (auth.login(log, pwd)) {
+                                    onConnecte(true, auth.identifiant())
                                     pwd = ""
                                     "Session active — reconnexion auto si la boutique te déconnecte."
                                 } else "Identifiants refusés — réessaie."
                             } catch (e: Exception) {
-                                "Erreur réseau : ${e.message}"
+                                msg = "Erreur réseau : ${e.message}"
+                            } finally {
+                                busy = false
                             }
-                            busy = false
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
@@ -235,7 +302,7 @@ private fun SessionCrous(auth: WpAuth, onPaiement: () -> Unit) {
                 OutlinedButton(
                     onClick = {
                         auth.logout()
-                        connecte = false
+                        onConnecte(false, null)
                         log = ""
                         msg = "Connecte-toi pour commander et voir tes commandes."
                     },
@@ -268,29 +335,41 @@ private fun LigneStatut(ok: Boolean, texte: String) {
 // Izly : connexion directe web (sans SMS) -> solde.
 // ---------------------------------------------------------------------------
 @Composable
-private fun CarteIzly(izly: IzlyRepo) {
+private fun CarteIzly(izly: IzlyRepo, onSolde: (String?) -> Unit) {
     var id by remember { mutableStateOf("") }
     var pin by remember { mutableStateOf("") }
     var solde by remember { mutableStateOf<String?>(null) }
+    var lie by remember { mutableStateOf(izly.aDesIdentifiants()) }
     var erreur by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    val lie = izly.aDesIdentifiants()
     val scope = rememberCoroutineScope()
 
     suspend fun charger(nouvelId: String, nouveauPin: String) {
         busy = true
         erreur = null
-        val r = izly.solde(nouvelId, nouveauPin)
-        busy = false
-        if (r.isSuccess) solde = r.getOrNull()
-        else erreur = r.exceptionOrNull()?.message
+        try {
+            val r = izly.solde(nouvelId, nouveauPin)
+            if (r.isSuccess) {
+                solde = r.getOrNull()
+                onSolde(solde)
+                lie = true
+            } else {
+                erreur = r.exceptionOrNull()?.message
+            }
+        } finally {
+            busy = false
+        }
     }
     // Auto-refresh silencieux si identifiants mémorisés.
     LaunchedEffect(Unit) {
-        if (lie) {
+        if (lie && solde == null) {
             val r = izly.soldeSauve()
-            if (r?.isSuccess == true) solde = r.getOrNull()
-            else erreur = r?.exceptionOrNull()?.message
+            if (r?.isSuccess == true) {
+                solde = r.getOrNull()
+                onSolde(solde)
+            } else if (r != null) {
+                erreur = r.exceptionOrNull()?.message
+            }
         }
     }
 
@@ -315,14 +394,22 @@ private fun CarteIzly(izly: IzlyRepo) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (solde != null) {
+                if (solde != null || lie) {
                     IconButton(onClick = {
                         scope.launch {
                             busy = true
-                            val r = izly.soldeSauve()
-                            busy = false
-                            if (r?.isSuccess == true) solde = r.getOrNull()
-                            else erreur = r?.exceptionOrNull()?.message
+                            try {
+                                val r = izly.soldeSauve()
+                                if (r?.isSuccess == true) {
+                                    solde = r.getOrNull()
+                                    onSolde(solde)
+                                    lie = true
+                                } else {
+                                    erreur = r?.exceptionOrNull()?.message
+                                }
+                            } finally {
+                                busy = false
+                            }
                         }
                     }) {
                         if (busy) CircularProgressIndicator(modifier = Modifier.size(20.dp))
@@ -336,8 +423,11 @@ private fun CarteIzly(izly: IzlyRepo) {
                 TextButton(onClick = {
                     izly.oublier()
                     solde = null
+                    onSolde(null)
                     erreur = null
+                    lie = false
                     id = ""
+                    pin = ""
                 }) { Text("Oublier mes identifiants Izly") }
             } else {
                 OutlinedTextField(
@@ -366,7 +456,6 @@ private fun CarteIzly(izly: IzlyRepo) {
         }
     }
 }
-
 // ---------------------------------------------------------------------------
 // Rappels (refonte : lignes aérées, chips qui passent à la ligne)
 // ---------------------------------------------------------------------------
