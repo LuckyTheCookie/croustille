@@ -155,7 +155,11 @@ fun ShopScreen(
                                         val r = cart.commander()
                                         checkoutBusy = false
                                         if (r.isFailure) {
-                                            scope.launch { dire(r.exceptionOrNull()?.message ?: "Checkout impossible.") }
+                                            val choix = snack.showSnackbar(
+                                                r.exceptionOrNull()?.message ?: "Checkout impossible.",
+                                                actionLabel = "Finir sur le site",
+                                            )
+                                            if (choix == SnackbarResult.ActionPerformed) onPanierWeb()
                                         } else {
                                             val redirect = r.getOrNull()!!.first
                                             if (redirect.estUrlPaiementIzly()) {

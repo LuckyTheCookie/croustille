@@ -106,6 +106,10 @@ class CartRepo(
     private val client: OkHttpClient,
     private val assurerSession: suspend () -> Boolean = { true },
 ) {
+    companion object {
+        const val ECHEC_VIDE = "Checkout refusé sans motif : réessaie ou finis sur le site."
+        const val SESSION_MORTE = "Session expirée pendant le paiement."
+    }
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     @Serializable
@@ -138,28 +142,52 @@ class CartRepo(
      * Checkout 100% natif : lit le formulaire de /commander/ (champs pré-remplis
      * quand connecté), coche les CGV, choisit Izly et poste sur ?wc-ajax=checkout.
      * Retourne l'URL de paiement (page Izly Authorize) en cas de succès.
+     * Rejoue une fois avec un formulaire frais en cas d'échec "vide" (nonce périmé).
      */
     suspend fun commander(): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
-        try {
+        if (!assurerSession()) {
+            return@withContext Result.failure(IllegalStateException("Session expirée, reconnecte-toi."))
+        }
+        val r1 = tentativeCommander()
+        if (r1.isSuccess) return@withContext r1
+        val msg1 = r1.exceptionOrNull()?.message.orEmpty()
+        if (msg1 == ECHEC_VIDE || msg1 == SESSION_MORTE) {
+            android.util.Log.i("Checkout", "2e essai avec session + formulaire frais")
             if (!assurerSession()) {
                 return@withContext Result.failure(IllegalStateException("Session expirée, reconnecte-toi."))
             }
+            return@withContext tentativeCommander()
+        }
+        r1
+    }
+
+    private suspend fun tentativeCommander(): Result<Pair<String, String>> {
+        return try {
+            val nb = compteurPanier()
+            android.util.Log.d("Checkout", "articles avant POST=$nb")
+            if (nb <= 0) {
+                return Result.failure(
+                    IllegalStateException("Panier vide ou expiré : recompose-le puis réessaie."),
+                )
+            }
             val html = get("${BASE}commander/")
             if (html.contains("woocommerce-form-login") && !html.contains("form.checkout")) {
-                return@withContext Result.failure(IllegalStateException("Connecte-toi dans l'onglet Compte."))
+                return Result.failure(IllegalStateException("Connecte-toi dans l'onglet Compte."))
             }
             val doc = org.jsoup.Jsoup.parse(html, "${BASE}commander/")
             val form = doc.selectFirst("form.checkout")
-                ?: return@withContext Result.failure(
+                ?: return Result.failure(
                     IllegalStateException("Checkout introuvable (panier vide ?)."),
                 )
             val methodes = form.select("input[name=payment_method]").eachAttr("value")
             val methode = if ("izlyvl" in methodes) "izlyvl" else methodes.firstOrNull()
-                ?: return@withContext Result.failure(IllegalStateException("Paiement Izly indisponible."))
+                ?: return Result.failure(IllegalStateException("Paiement Izly indisponible."))
+            val noms = mutableListOf<String>()
             val corps = FormBody.Builder()
             for (el in form.select("input[name], select[name], textarea[name]")) {
                 val nom = el.attr("name")
                 if (nom.isBlank() || nom == "terms" || nom == "payment_method") continue
+                noms.add(nom)
                 val type = el.attr("type").lowercase()
                 if (type == "checkbox" || type == "radio") {
                     if (el.hasAttr("checked")) corps.add(nom, el.attr("value").ifBlank { "1" })
@@ -172,21 +200,34 @@ class CartRepo(
                 } else el.attr("value")
                 corps.add(nom, valeur)
             }
+            if ("_wp_http_referer" !in noms) corps.add("_wp_http_referer", "/fonderie/commander/")
             corps.add("terms", "on")
             corps.add("terms-field", "1")
             corps.add("payment_method", methode)
+            android.util.Log.d("Checkout", "methode=$methode parmi=$methodes nonce=${"_wp_http_referer" in noms || noms.any { "nonce" in it }}")
             val req = Request.Builder().url("${BASE}?wc-ajax=checkout").post(corps.build()).build()
-            val rep = client.newCall(req).execute().use { it.body!!.string() }
-            val o = org.json.JSONObject(rep)
+            val (code, rep) = client.newCall(req).execute().use { Pair(it.code, it.body?.string().orEmpty()) }
+            android.util.Log.i("Checkout", "POST code=$code rep=${rep.take(2000)}")
+            if (code == 401 || code == 403) {
+                return Result.failure(IllegalStateException(SESSION_MORTE))
+            }
+            val o = try {
+                org.json.JSONObject(rep)
+            } catch (e: Exception) {
+                return Result.failure(
+                    IllegalStateException("Réponse inattendue de la boutique (code $code)."),
+                )
+            }
             if (o.optString("result") == "success") {
                 val redirect = o.optString("redirect")
                 if (redirect.isBlank()) {
-                    return@withContext Result.failure(IllegalStateException("Checkout sans redirection."))
+                    return Result.failure(IllegalStateException("Checkout sans redirection."))
                 }
+                android.util.Log.i("Checkout", "redirect=$redirect")
                 Result.success(redirect to methode)
             } else {
                 val msg = org.jsoup.Jsoup.parse(o.optString("messages")).text().take(220)
-                Result.failure(IllegalStateException(msg.ifBlank { "Checkout refusé." }))
+                Result.failure(IllegalStateException(msg.ifBlank { ECHEC_VIDE }))
             }
         } catch (e: Exception) {
             Result.failure(e)
