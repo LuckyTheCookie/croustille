@@ -62,6 +62,7 @@ import fr.croustille.data.StoreProduct
 import fr.croustille.data.centimesVersEuros
 import fr.croustille.data.choixDessert
 import fr.croustille.data.choixMenu
+import fr.croustille.data.estUrlPaiementIzly
 import fr.croustille.data.prixAffiche
 import fr.croustille.ui.onboarding.StaggeredIn
 import kotlinx.coroutines.launch
@@ -82,7 +83,8 @@ fun ShopScreen(
     var fiche by remember { mutableStateOf<StoreProduct?>(null) }
     var panier by remember { mutableStateOf<Panier?>(null) }
     var urlPaiement by remember { mutableStateOf<String?>(null) }
-    var actionBusy by remember { mutableStateOf(false) }
+    var checkoutBusy by remember { mutableStateOf(false) }
+    var payBusy by remember { mutableStateOf(false) }
     val snack = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -138,7 +140,7 @@ fun ShopScreen(
                         item {
                             CartePanier(
                                 panier = p,
-                                busy = actionBusy,
+                                busy = checkoutBusy,
                                 onPayer = {
                                     val creds = izly.lireIdentifiants()
                                     if (creds == null) {
@@ -148,14 +150,23 @@ fun ShopScreen(
                                         }
                                         return@CartePanier
                                     }
-                                    actionBusy = true
+                                    checkoutBusy = true
                                     scope.launch {
                                         val r = cart.commander()
+                                        checkoutBusy = false
                                         if (r.isFailure) {
-                                            actionBusy = false
                                             scope.launch { dire(r.exceptionOrNull()?.message ?: "Checkout impossible.") }
                                         } else {
-                                            urlPaiement = r.getOrNull()!!.first
+                                            val redirect = r.getOrNull()!!.first
+                                            if (redirect.estUrlPaiementIzly()) {
+                                                urlPaiement = redirect
+                                            } else {
+                                                // La boutique renvoie ailleurs (ex page order-pay) : finir sur le site.
+                                                scope.launch {
+                                                    dire("Suite du paiement sur le site.")
+                                                    onPanierWeb()
+                                                }
+                                            }
                                         }
                                     }
                                 },
@@ -198,8 +209,14 @@ fun ShopScreen(
     urlPaiement?.let { url ->
         SheetPaiement(
             montant = panier?.let { centimesVersEuros(it.total) } ?: "",
-            busy = actionBusy,
-            onFermer = { if (!actionBusy) urlPaiement = null },
+            busy = payBusy,
+            onFermer = {
+                if (payBusy) return@SheetPaiement
+                // La commande existe déjà côté boutique (en attente) : le token est
+                // à usage unique, on le jette. Repayer = repasser par "Payer".
+                urlPaiement = null
+                scope.launch { dire("Commande créée : retrouve-la dans Mes commandes pour payer.") }
+            },
             onConfirmer = {
                 val creds = izly.lireIdentifiants()
                 if (creds == null) {
@@ -207,24 +224,31 @@ fun ShopScreen(
                     onCompte()
                     return@SheetPaiement
                 }
-                actionBusy = true
+                payBusy = true
                 scope.launch {
                     val r = cart.payerIzly(url, creds.first, creds.second)
-                    actionBusy = false
-                    if (r.isSuccess) {
-                        urlPaiement = null
-                        chargerPanier()
-                        scope.launch { dire("Payé ! Retrouve ton numéro dans l'onglet Commandes.") }
-                        onCommandePayee()
+                    payBusy = false
+                    urlPaiement = null // token consommé dans tous les cas : anti-rejeu
+                    if (r.isFailure) {
+                        val choix = snack.showSnackbar(
+                            r.exceptionOrNull()?.message ?: "Paiement refusé.",
+                            actionLabel = "Site web",
+                        )
+                        if (choix == SnackbarResult.ActionPerformed) onPanierWeb()
                     } else {
-                        urlPaiement = null
-                        scope.launch {
-                            val choix = snack.showSnackbar(
-                                r.exceptionOrNull()?.message ?: "Paiement refusé.",
-                                actionLabel = "Site web",
-                            )
-                            if (choix == SnackbarResult.ActionPerformed) onPanierWeb()
+                        // Preuve de paiement : le panier doit être vide côté boutique.
+                        val vide = try {
+                            cart.contenu().items.isEmpty()
+                        } catch (e: Exception) {
+                            false
                         }
+                        chargerPanier()
+                        if (vide) {
+                            scope.launch { dire("Payé ! N° dans l'onglet Commandes.") }
+                        } else {
+                            scope.launch { dire("Paiement envoyé : vérifie le statut dans Mes commandes.") }
+                        }
+                        onCommandePayee()
                     }
                 }
             },

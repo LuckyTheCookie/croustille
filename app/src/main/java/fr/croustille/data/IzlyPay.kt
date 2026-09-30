@@ -56,6 +56,9 @@ class IzlyPay(private val client: OkHttpClient) {
                 }.ifBlank { authorizeUrl }
                 val methode = form.attr("method").ifBlank { "post" }
                 Log.i(TAG, "form $methode $action (${form.select("input").size} champs)")
+                Log.i(TAG, "inputs=" + form.select("input").joinToString(",") {
+                    "${it.attr("name")}:${it.attr("type")}"
+                })
 
                 val corps = FormBody.Builder()
                 for (input in form.select("input")) {
@@ -88,7 +91,7 @@ class IzlyPay(private val client: OkHttpClient) {
                     .header("Referer", authorizeUrl)
                     .let { if (methode.equals("get", true)) it.get() else it.post(corps.build()) }
                     .build()
-                var reponse = client.newCall(req).execute()
+                val reponse = client.newCall(req).execute()
                 reponse.use {
                     val finale = it.request.url.toString()
                     val corpsTexte = try {
@@ -97,6 +100,12 @@ class IzlyPay(private val client: OkHttpClient) {
                         ""
                     }
                     Log.i(TAG, "final=$finale code=${it.code}")
+                    // postForm() peut répondre du JSON (ex {"redirect"/"url"}) au lieu de rediriger.
+                    val suiteJson = lienDepuisJson(corpsTexte, finale)
+                    if (suiteJson != null) {
+                        Log.i(TAG, "suite JSON -> $suiteJson")
+                        return@withContext suivreLien(suiteJson)
+                    }
                     val docFin = Jsoup.parse(corpsTexte, finale)
                     val erreurPage = docFin.selectFirst("#id_error")?.text()?.trim().orEmpty()
                     if (erreurPage.isNotBlank()) {
@@ -109,6 +118,7 @@ class IzlyPay(private val client: OkHttpClient) {
                     }
                     if ("crousandgo" in finale.lowercase()) {
                         // Retour boutique = paiement accepté, commande créée.
+                        // La preuve définitive (panier vidé) est vérifiée par l'appelant.
                         return@withContext Result.success(finale)
                     }
                     if (docFin.selectFirst("input[type=password]") != null ||
@@ -118,7 +128,10 @@ class IzlyPay(private val client: OkHttpClient) {
                             IllegalStateException("Izly redemande les identifiants."),
                         )
                     }
-                    Result.success(finale)
+                    // Page intermédiaire inconnue : on ne crie pas victoire.
+                    return@withContext Result.failure(
+                        IllegalStateException("Réponse Izly inattendue, vérifie dans Mes commandes."),
+                    )
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "échec", e)
@@ -134,6 +147,76 @@ class IzlyPay(private val client: OkHttpClient) {
             if (!it.isSuccessful && it.code != 500) throw IllegalStateException("Izly injoignable (${it.code}).")
             it.body!!.string()
         }
+    }
+
+    /** Extrait un lien de suite d'une éventuelle réponse JSON (postForm AJAX). */
+    private fun lienDepuisJson(corps: String, base: String): String? {
+        val t = corps.trim()
+        if (!t.startsWith("{")) return null
+        return try {
+            val o = org.json.JSONObject(t)
+            listOf("redirect", "url", "returnUrl", "redirectUrl", "location")
+                .firstNotNullOfOrNull { k -> o.optString(k).takeIf { it.isNotBlank() } }
+                ?.let { lien ->
+                    try {
+                        base.toHttpUrl().resolve(lien)?.toString() ?: lien
+                    } catch (e: Exception) {
+                        lien
+                    }
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "JSON illisible", e)
+            null
+        }
+    }
+
+    /** Suit un lien de suite (confirmation ou étape suivante) et évalue le résultat. */
+    private suspend fun suivreLien(url: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            try {
+                val req = Request.Builder().url(url)
+                    .header("User-Agent", "Croustille/1.0")
+                    .get().build()
+                client.newCall(req).execute().use {
+                    val finale = it.request.url.toString()
+                    val corps = try {
+                        it.peekBody(300_000).string()
+                    } catch (e: Exception) {
+                        ""
+                    }
+                    evaluerResultat(finale, corps)
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
+    private fun evaluerResultat(finale: String, corpsTexte: String): Result<String> {
+        val docFin = Jsoup.parse(corpsTexte, finale)
+        val erreurPage = docFin.selectFirst("#id_error")?.text()?.trim().orEmpty()
+        if (erreurPage.isNotBlank()) {
+            return Result.failure(IllegalStateException("Izly : $erreurPage"))
+        }
+        if ("error" in finale.lowercase() || "erreur" in finale.lowercase()) {
+            return Result.failure(
+                IllegalStateException("Izly a refusé (solde ? identifiants ?)."),
+            )
+        }
+        if ("crousandgo" in finale.lowercase()) {
+            // Retour boutique = paiement accepté, commande créée.
+            return Result.success(finale)
+        }
+        if (docFin.selectFirst("input[type=password]") != null ||
+            corpsTexte.contains("Code secret")
+        ) {
+            return Result.failure(
+                IllegalStateException("Izly redemande les identifiants."),
+            )
+        }
+        // Page intermédiaire inconnue : on ne crie pas victoire.
+        return Result.failure(
+            IllegalStateException("Réponse Izly inattendue, vérifie dans Mes commandes."),
+        )
     }
 }
 
