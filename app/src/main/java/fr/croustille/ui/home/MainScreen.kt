@@ -146,6 +146,7 @@ fun MainScreen(
             2 -> OrdersScreen(
                 repo = orders,
                 onCompte = { onglet = 3 },
+                onPayer = { rootNav.navigate("paiement") },
                 modifier = mod,
             )
             else -> AccountScreen(

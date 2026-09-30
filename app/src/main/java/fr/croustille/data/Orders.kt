@@ -59,6 +59,20 @@ fun Retrait.creneauMinutes(): Pair<Int, Int>? = try {
 
 class PasConnecte : IllegalStateException("Connecte-toi dans l'onglet Compte pour voir tes commandes.")
 
+/** Catégorie d'affichage d'une commande selon son statut WooCommerce. */
+enum class CategorieCommande { NORMALE, ATTENTE_PAIEMENT, ANNULEE }
+
+fun categorieDe(statut: String): CategorieCommande {
+    val s = statut.lowercase()
+    return when {
+        listOf("annul", "cancel", "rembours", "refund", "échou", "echou", "failed").any { s.contains(it) } ->
+            CategorieCommande.ANNULEE
+        listOf("attente", "paiement", "pending", "on-hold", "on hold").any { s.contains(it) } ->
+            CategorieCommande.ATTENTE_PAIEMENT
+        else -> CategorieCommande.NORMALE
+    }
+}
+
 /** Lit "Mes commandes" WooCommerce avec la session de l'app (sans WebView). */
 class OrdersRepo(
     private val client: OkHttpClient,

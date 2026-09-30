@@ -22,11 +22,14 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ConfirmationNumber
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -56,11 +59,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import fr.croustille.data.CategorieCommande
 import fr.croustille.data.Commande
 import fr.croustille.data.LigneCommande
 import fr.croustille.data.OrdersRepo
 import fr.croustille.data.PasConnecte
 import fr.croustille.data.Retrait
+import fr.croustille.data.categorieDe
 import fr.croustille.data.dateRetrait
 import fr.croustille.data.retraitDe
 import fr.croustille.ui.onboarding.StaggeredIn
@@ -71,6 +76,7 @@ import kotlinx.coroutines.launch
 fun OrdersScreen(
     repo: OrdersRepo,
     onCompte: () -> Unit,
+    onPayer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var commandes by remember { mutableStateOf<List<Commande>?>(null) }
@@ -108,7 +114,13 @@ fun OrdersScreen(
     BackHandler(enabled = selection != null) { selection = null }
 
     selection?.let { c ->
-        TicketScreen(commande = c, repo = repo, onRetour = { selection = null }, modifier = modifier)
+        TicketScreen(
+            commande = c,
+            repo = repo,
+            onRetour = { selection = null },
+            onPayer = onPayer,
+            modifier = modifier,
+        )
         return
     }
 
@@ -182,9 +194,18 @@ fun OrdersScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        item { HeroDerniere(commandes!!.first(), retraitHero, onVoir = { selection = commandes!!.first() }) }
+                        item {
+                            HeroDerniere(
+                                commandes!!.first(),
+                                retraitHero,
+                                onVoir = { selection = commandes!!.first() },
+                                onPayer = onPayer,
+                            )
+                        }
                         itemsIndexed(commandes!!.drop(1), key = { _, c -> c.numero + c.date }) { i, c ->
-                            StaggeredIn(i) { LigneCommandeCard(c, onVoir = { selection = c }) }
+                            StaggeredIn(i) {
+                                LigneCommandeCard(c, onVoir = { selection = c }, onPayer = onPayer)
+                            }
                         }
                     }
                 }
@@ -193,20 +214,67 @@ fun OrdersScreen(
     }
 }
 
+/** Pastille de statut colorée : verte (ok), sable (à payer), grise (annulée). */
 @Composable
-private fun HeroDerniere(c: Commande, retrait: Retrait?, onVoir: () -> Unit) {
+private fun BadgeStatut(statut: String) {
+    val cat = categorieDe(statut)
+    val (fond, contenu, icone) = when (cat) {
+        CategorieCommande.ANNULEE -> Triple(
+            MaterialTheme.colorScheme.surfaceContainerHigh,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            Icons.Default.Cancel,
+        )
+        CategorieCommande.ATTENTE_PAIEMENT -> Triple(
+            MaterialTheme.colorScheme.secondaryContainer,
+            MaterialTheme.colorScheme.onSecondaryContainer,
+            Icons.Default.Schedule,
+        )
+        CategorieCommande.NORMALE -> Triple(
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+            Icons.Default.CheckCircle,
+        )
+    }
+    Row(
+        Modifier.clip(CircleShape).background(fond).padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icone, null, tint = contenu, modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(statut, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = contenu)
+    }
+}
+
+@Composable
+private fun HeroDerniere(c: Commande, retrait: Retrait?, onVoir: () -> Unit, onPayer: () -> Unit) {
     val presse = LocalClipboardManager.current
+    val cat = categorieDe(c.statut)
+    val attente = cat == CategorieCommande.ATTENTE_PAIEMENT
+    val annulee = cat == CategorieCommande.ANNULEE
     Card(
         onClick = onVoir,
-        colors = CardDefaults.cardColors(MaterialTheme.colorScheme.primaryContainer),
+        colors = CardDefaults.cardColors(
+            if (attente) MaterialTheme.colorScheme.secondaryContainer
+            else MaterialTheme.colorScheme.primaryContainer,
+        ),
         shape = RoundedCornerShape(28.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.ConfirmationNumber, null, tint = MaterialTheme.colorScheme.primary)
+                Icon(
+                    Icons.Default.ConfirmationNumber, null,
+                    tint = if (attente) MaterialTheme.colorScheme.onSecondaryContainer
+                    else MaterialTheme.colorScheme.primary,
+                )
                 Spacer(Modifier.width(6.dp))
-                Text("DERNIÈRE COMMANDE", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                Text(
+                    if (annulee) "DERNIÈRE COMMANDE · ANNULÉE" else "DERNIÈRE COMMANDE",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (attente) MaterialTheme.colorScheme.onSecondaryContainer
+                    else MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                )
             }
             Spacer(Modifier.height(4.dp))
             Text(
@@ -214,18 +282,28 @@ private fun HeroDerniere(c: Commande, retrait: Retrait?, onVoir: () -> Unit) {
                 style = MaterialTheme.typography.displayLarge,
                 fontWeight = FontWeight.Black,
                 fontSize = 64.sp,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                color = (if (attente) MaterialTheme.colorScheme.onSecondaryContainer
+                else MaterialTheme.colorScheme.onPrimaryContainer)
+                    .copy(alpha = if (annulee) 0.45f else 1f),
             )
+            BadgeStatut(c.statut)
+            Spacer(Modifier.height(4.dp))
             Text(
-                texteRetrait(retrait) ?: "${c.statut} · commandée le ${c.date}",
+                if (annulee) "Cette commande a été annulée — aucun retrait à prévoir."
+                else texteRetrait(retrait) ?: "${c.statut} · commandée le ${c.date}",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = { presse.setText(AnnotatedString(c.numero)) }) {
-                Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Copier le numéro")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (attente) {
+                    Button(onClick = onPayer) { Text("Payer maintenant") }
+                }
+                OutlinedButton(onClick = { presse.setText(AnnotatedString(c.numero)) }) {
+                    Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Copier le numéro")
+                }
             }
         }
     }
@@ -243,19 +321,39 @@ fun texteRetrait(r: Retrait?): String? {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LigneCommandeCard(c: Commande, onVoir: () -> Unit) {
+private fun LigneCommandeCard(c: Commande, onVoir: () -> Unit, onPayer: () -> Unit) {
+    val cat = categorieDe(c.statut)
     Card(
         onClick = onVoir,
-        colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer),
+        colors = CardDefaults.cardColors(
+            if (cat == CategorieCommande.ATTENTE_PAIEMENT) MaterialTheme.colorScheme.secondaryContainer
+            else MaterialTheme.colorScheme.surfaceContainer,
+        ),
         shape = RoundedCornerShape(20.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(c.numero, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("${c.statut} · ${c.date}", style = MaterialTheme.typography.bodySmall)
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        c.numero,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface.copy(
+                            alpha = if (cat == CategorieCommande.ANNULEE) 0.5f else 1f,
+                        ),
+                    )
+                    Text(c.date, style = MaterialTheme.typography.bodySmall)
+                }
+                Text(c.total, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
             }
-            Text(c.total, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BadgeStatut(c.statut)
+                if (cat == CategorieCommande.ATTENTE_PAIEMENT) {
+                    Spacer(Modifier.weight(1f))
+                    Button(onClick = onPayer) { Text("Payer") }
+                }
+            }
         }
     }
 }
@@ -266,6 +364,7 @@ private fun TicketScreen(
     commande: Commande,
     repo: OrdersRepo,
     onRetour: () -> Unit,
+    onPayer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var lignes by remember(commande) { mutableStateOf<List<LigneCommande>?>(null) }
@@ -303,15 +402,24 @@ private fun TicketScreen(
                     Text("Montre ce numéro au retrait", style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(6.dp))
                     val retrait = lignes?.let { retraitDe(it) }
+                    val catTicket = categorieDe(commande.statut)
+                    BadgeStatut(commande.statut)
+                    Spacer(Modifier.height(6.dp))
                     Text(
-                        texteRetrait(retrait) ?: "${commande.statut} · ${commande.date} · ${commande.total}",
+                        if (catTicket == CategorieCommande.ANNULEE) "Commande annulée — aucun retrait à prévoir."
+                        else texteRetrait(retrait) ?: "${commande.statut} · ${commande.date} · ${commande.total}",
                         style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
                     )
                     Spacer(Modifier.height(10.dp))
-                    Button(onClick = { presse.setText(AnnotatedString(commande.numero)) }) {
-                        Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Copier")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (catTicket == CategorieCommande.ATTENTE_PAIEMENT) {
+                            Button(onClick = onPayer) { Text("Payer") }
+                        }
+                        Button(onClick = { presse.setText(AnnotatedString(commande.numero)) }) {
+                            Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Copier")
+                        }
                     }
                 }
             }
