@@ -86,6 +86,9 @@ fun AccountScreen(
     var connecte by remember { mutableStateOf(auth.hasSession()) }
     var crousId by remember { mutableStateOf(auth.identifiant()) }
     var izlySolde by remember { mutableStateOf<String?>(null) }
+    // État Izly remonté ici : la carte est recyclée au scroll, sans ça le solde
+    // disparaît une fraction de seconde à chaque remontée (flicker).
+    val etatIzly = remember { EtatIzly(izly) }
     val menuOn by prefs.menu13h.collectAsState(initial = false)
     val stockOn by prefs.stockOn.collectAsState(initial = false)
     val rdvOn by prefs.rdvRetrait.collectAsState(initial = false)
@@ -119,7 +122,7 @@ fun AccountScreen(
         }
         item {
             Section("Izly") {
-                CarteIzly(izly = izly, onSolde = { izlySolde = it })
+                CarteIzly(etat = etatIzly, onSolde = { izlySolde = it })
             }
         }
         item {
@@ -127,19 +130,23 @@ fun AccountScreen(
                 CarteRappels(prefs = prefs)
             }
         }
-        item {
-            Section("Labo & tests") {
-                ZoneTest(prefs = prefs)
+        if (fr.croustille.BuildConfig.DEBUG) {
+            item {
+                Section("Labo & tests") {
+                    ZoneTest(prefs = prefs)
+                }
             }
         }
-        item {
-            Text(
-                "Astuce : touche le bandeau du restaurant dans l'onglet Menus pour changer de lieu.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
+}
+
+private class EtatIzly(val izly: IzlyRepo) {
+    var id by mutableStateOf("")
+    var pin by mutableStateOf("")
+    var solde by mutableStateOf<String?>(null)
+    var lie by mutableStateOf(izly.aDesIdentifiants())
+    var erreur by mutableStateOf<String?>(null)
+    var busy by mutableStateOf(false)
 }
 
 @Composable
@@ -223,8 +230,7 @@ private fun SessionCrous(
     var pwd by remember { mutableStateOf("") }
     var msg by remember(connecte) {
         mutableStateOf(
-            if (connecte) "Session active — tes commandes se synchronisent toutes seules."
-            else "Connecte-toi pour commander et voir tes commandes.",
+            if (connecte) "" else "Connecte-toi pour commander et voir tes commandes.",
         )
     }
     var busy by remember { mutableStateOf(false) }
@@ -275,7 +281,7 @@ private fun SessionCrous(
                                 msg = if (auth.login(log, pwd)) {
                                     onConnecte(true, auth.identifiant())
                                     pwd = ""
-                                    "Session active — reconnexion auto si la boutique te déconnecte."
+                                    ""
                                 } else "Identifiants refusés — réessaie."
                             } catch (e: Exception) {
                                 msg = "Erreur réseau : ${e.message}"
@@ -294,7 +300,7 @@ private fun SessionCrous(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                Button(onClick = onPaiement, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onPaiement, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.ShoppingBag, null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Voir mon panier / payer (Izly)")
@@ -313,7 +319,9 @@ private fun SessionCrous(
                     Text("Se déconnecter")
                 }
             }
-            Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (msg.isNotBlank()) {
+                Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }
@@ -335,40 +343,35 @@ private fun LigneStatut(ok: Boolean, texte: String) {
 // Izly : connexion directe web (sans SMS) -> solde.
 // ---------------------------------------------------------------------------
 @Composable
-private fun CarteIzly(izly: IzlyRepo, onSolde: (String?) -> Unit) {
-    var id by remember { mutableStateOf("") }
-    var pin by remember { mutableStateOf("") }
-    var solde by remember { mutableStateOf<String?>(null) }
-    var lie by remember { mutableStateOf(izly.aDesIdentifiants()) }
-    var erreur by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
+private fun CarteIzly(etat: EtatIzly, onSolde: (String?) -> Unit) {
+    val izly = etat.izly
     val scope = rememberCoroutineScope()
 
     suspend fun charger(nouvelId: String, nouveauPin: String) {
-        busy = true
-        erreur = null
+        etat.busy = true
+        etat.erreur = null
         try {
             val r = izly.solde(nouvelId, nouveauPin)
             if (r.isSuccess) {
-                solde = r.getOrNull()
-                onSolde(solde)
-                lie = true
+                etat.solde = r.getOrNull()
+                onSolde(etat.solde)
+                etat.lie = true
             } else {
-                erreur = r.exceptionOrNull()?.message
+                etat.erreur = r.exceptionOrNull()?.message
             }
         } finally {
-            busy = false
+            etat.busy = false
         }
     }
     // Auto-refresh silencieux si identifiants mémorisés.
     LaunchedEffect(Unit) {
-        if (lie && solde == null) {
+        if (etat.lie && etat.solde == null) {
             val r = izly.soldeSauve()
             if (r?.isSuccess == true) {
-                solde = r.getOrNull()
-                onSolde(solde)
+                etat.solde = r.getOrNull()
+                onSolde(etat.solde)
             } else if (r != null) {
-                erreur = r.exceptionOrNull()?.message
+                etat.erreur = r.exceptionOrNull()?.message
             }
         }
     }
@@ -390,68 +393,63 @@ private fun CarteIzly(izly: IzlyRepo, onSolde: (String?) -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Text("Solde Izly", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
-                        if (solde != null) "Compte lié" else "Recharge et paiements CROUS",
+                        if (etat.solde != null) "Compte lié" else "Recharge et paiements CROUS",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (solde != null || lie) {
+                if (etat.solde != null || etat.lie) {
                     IconButton(onClick = {
                         scope.launch {
-                            busy = true
+                            etat.busy = true
                             try {
                                 val r = izly.soldeSauve()
                                 if (r?.isSuccess == true) {
-                                    solde = r.getOrNull()
-                                    onSolde(solde)
-                                    lie = true
+                                    etat.solde = r.getOrNull()
+                                    onSolde(etat.solde)
+                                    etat.lie = true
                                 } else {
-                                    erreur = r?.exceptionOrNull()?.message
+                                    etat.erreur = r?.exceptionOrNull()?.message
                                 }
                             } finally {
-                                busy = false
+                                etat.busy = false
                             }
                         }
                     }) {
-                        if (busy) CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        if (etat.busy) CircularProgressIndicator(modifier = Modifier.size(20.dp))
                         else Icon(Icons.Default.Refresh, "Actualiser")
                     }
                 }
             }
 
-            if (solde != null) {
-                Text(solde!!, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
+            if (etat.solde != null) {
+                Text(etat.solde!!, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
                 TextButton(onClick = {
                     izly.oublier()
-                    solde = null
+                    etat.solde = null
                     onSolde(null)
-                    erreur = null
-                    lie = false
-                    id = ""
-                    pin = ""
+                    etat.erreur = null
+                    etat.lie = false
+                    etat.id = ""
+                    etat.pin = ""
                 }) { Text("Oublier mes identifiants Izly") }
             } else {
                 OutlinedTextField(
-                    id, { id = it }, label = { Text("E-mail ou mobile Izly") },
+                    etat.id, { etat.id = it }, label = { Text("E-mail ou mobile Izly") },
                     singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
-                    pin, { pin = it }, label = { Text("Code secret (6 chiffres)") },
+                    etat.pin, { etat.pin = it }, label = { Text("Code secret (6 chiffres)") },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
                 )
                 Button(
-                    onClick = { scope.launch { charger(id.trim(), pin.trim()) } },
-                    enabled = !busy && id.isNotBlank() && pin.isNotBlank(),
+                    onClick = { scope.launch { charger(etat.id.trim(), etat.pin.trim()) } },
+                    enabled = !etat.busy && etat.id.isNotBlank() && etat.pin.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(if (busy) "Connexion…" else "Voir mon solde")
+                    Text(if (etat.busy) "Connexion…" else "Voir mon solde")
                 }
-                erreur?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-                Text(
-                    "Connexion directe, sans SMS. Identifiants chiffrés sur l'appareil.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                etat.erreur?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             }
         }
     }
@@ -595,7 +593,7 @@ private fun CarteRappels(prefs: Prefs) {
                     Icon(Icons.Default.Timer, null, modifier = Modifier.size(14.dp).padding(top = 2.dp))
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        "2–3 petites requêtes par passage, rien entre les passages. Si les notifs n'arrivent pas, désactive l'optimisation batterie pour Croustille.",
+                        "Si les notifs n'arrivent pas, désactive l'optimisation batterie pour Croustille.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )

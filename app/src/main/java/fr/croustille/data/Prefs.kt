@@ -21,6 +21,7 @@ private val STOCK_SEUIL = intPreferencesKey("stock_seuil")
 private val LAST_MENU = stringPreferencesKey("last_menu_date")
 private val LAST_STOCK = intPreferencesKey("last_stock_min")
 private val LAST_STOCK_DATE = stringPreferencesKey("last_stock_date")
+private val MAJ_IGNOREE = stringPreferencesKey("maj_ignoree")
 
 class Prefs(private val ctx: Context) {
     val restoCode: Flow<Int> = ctx.prefs.data.map { it[RESTO] ?: FONDERIE_CODE }
@@ -34,6 +35,7 @@ class Prefs(private val ctx: Context) {
     val lastMenuDate: Flow<String?> = ctx.prefs.data.map { it[LAST_MENU] }
     val lastStockMin: Flow<Int?> = ctx.prefs.data.map { it[LAST_STOCK] }
     val lastStockDate: Flow<String?> = ctx.prefs.data.map { it[LAST_STOCK_DATE] }
+    val majIgnoree: Flow<String?> = ctx.prefs.data.map { it[MAJ_IGNOREE] }
 
     suspend fun choisirResto(region: Int, resto: Int) {
         ctx.prefs.edit {
@@ -55,6 +57,12 @@ class Prefs(private val ctx: Context) {
         ctx.prefs.edit {
             if (min == null) it.remove(LAST_STOCK) else it[LAST_STOCK] = min
             if (date == null) it.remove(LAST_STOCK_DATE) else it[LAST_STOCK_DATE] = date
+        }
+    }
+
+    suspend fun setMajIgnoree(tag: String?) {
+        ctx.prefs.edit {
+            if (tag == null) it.remove(MAJ_IGNOREE) else it[MAJ_IGNOREE] = tag
         }
     }
 }

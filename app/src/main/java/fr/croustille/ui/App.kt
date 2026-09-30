@@ -8,7 +8,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -24,7 +27,10 @@ import fr.croustille.data.CroustillantApi
 import fr.croustille.data.IzlyRepo
 import fr.croustille.data.IzlyStore
 import fr.croustille.data.JarMemoire
+import fr.croustille.data.MajRepo
 import fr.croustille.data.OrdersRepo
+import fr.croustille.data.ReleaseInfo
+import fr.croustille.data.clientMaj
 import fr.croustille.data.PersistentCookieJar
 import fr.croustille.data.Prefs
 import fr.croustille.data.STRASBOURG_CODE
@@ -32,6 +38,7 @@ import fr.croustille.data.StoreApi
 import fr.croustille.data.WpAuth
 import fr.croustille.ui.home.MainScreen
 import fr.croustille.ui.home.PaiementScreen
+import fr.croustille.ui.maj.DialogMaj
 import fr.croustille.ui.onboarding.CrousScreen
 import fr.croustille.ui.onboarding.RestosScreen
 import okhttp3.OkHttpClient
@@ -68,6 +75,16 @@ fun App(prefs: Prefs, ongletInitial: Int = 0) {
         } catch (e: Exception) {
             // Tant pis : l'utilisateur se reconnectera via l'onglet Compte.
         }
+    }
+
+    // Vérifie les mises à jour à chaque démarrage.
+    val majRepo = remember { MajRepo(clientMaj()) }
+    var majDispo by remember { mutableStateOf<ReleaseInfo?>(null) }
+    LaunchedEffect(Unit) {
+        majDispo = majRepo.chercher(prefs.majIgnoree.first())
+    }
+    majDispo?.let { info ->
+        DialogMaj(info = info, maj = majRepo, prefs = prefs, onFermer = { majDispo = null })
     }
 
     val done by prefs.onboardingDone.collectAsState(initial = null)

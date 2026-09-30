@@ -14,13 +14,32 @@ android {
         applicationId = "fr.croustille"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "1.0.0"
         vectorDrawables { useSupportLibrary = true }
+    }
+
+    // Signature release via app/keystore.properties (fichier local, jamais commité).
+    val cles = Properties().apply {
+        val f = rootProject.file("app/keystore.properties")
+        if (f.exists()) f.inputStream().use(::load)
+    }
+    val cleOk = cles.getProperty("storePassword")?.isNotBlank() == true &&
+        rootProject.file(cles.getProperty("storeFile", "")).exists()
+    signingConfigs {
+        create("release") {
+            if (cleOk) {
+                storeFile = rootProject.file(cles.getProperty("storeFile"))
+                storePassword = cles.getProperty("storePassword")
+                keyAlias = cles.getProperty("keyAlias")
+                keyPassword = cles.getProperty("keyPassword")
+            }
+        }
     }
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName(if (cleOk) "release" else "debug")
         }
         debug {
             applicationIdSuffix = ".debug"
@@ -30,7 +49,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 }
 
 dependencies {
