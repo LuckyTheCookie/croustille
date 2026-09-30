@@ -35,19 +35,21 @@ fun retraitDe(lignes: List<LigneCommande>): Retrait? {
     return Retrait(jour = jour, heure = cherche("heure"), zone = cherche("zone"))
 }
 
-/** "28/9/2026" (format du site, sans zéros) -> LocalDate. */
+/** "28/9/2026" (format du site, sans zéros) -> LocalDate. Tolère "28.09.2026". */
 fun Retrait.dateRetrait(): java.time.LocalDate? = try {
-    val p = jour.split('/', '.').map { it.trim().toInt() }
-    java.time.LocalDate.of(p[2], p[1], p[0])
+    val m = Regex("""(\d{1,2})[/.](\d{1,2})[/.](\d{4})""").find(jour) ?: return null
+    java.time.LocalDate.of(m.groupValues[3].toInt(), m.groupValues[2].toInt(), m.groupValues[1].toInt())
 } catch (e: Exception) {
     null
 }
 
-/** "11:45-13:30" -> (début minutes, fin minutes). */
+/** "11:45-13:30" (ou "11h45", tirets variés) -> (début minutes, fin minutes). */
 fun Retrait.creneauMinutes(): Pair<Int, Int>? = try {
-    val (a, b) = heure.split('-').map { it.trim() }
+    val normalise = heure.replace('–', '-').replace('—', '-')
+        .replace(Regex("""(\d{1,2})h(\d{2})"""), "$1:$2")
+    val (a, b) = normalise.split('-').map { it.trim() }
     fun m(s: String): Int {
-        val (h, mi) = s.split(':').map { it.toInt() }
+        val (h, mi) = s.split(':').map { it.trim().toInt() }
         return h * 60 + mi
     }
     m(a) to m(b)

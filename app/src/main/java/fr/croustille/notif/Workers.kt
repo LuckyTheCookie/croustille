@@ -9,11 +9,13 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import fr.croustille.data.CookieStore
+import fr.croustille.data.CrousStore
 import fr.croustille.data.CroustillantApi
 import fr.croustille.data.OrdersRepo
 import fr.croustille.data.PersistentCookieJar
 import fr.croustille.data.Prefs
 import fr.croustille.data.StoreApi
+import fr.croustille.data.WpAuth
 import fr.croustille.data.creneauMinutes
 import fr.croustille.data.cuisineCode
 import fr.croustille.data.dateRetrait
@@ -38,7 +40,8 @@ private fun estWeekend(): Boolean {
 }
 
 /** (avancement 0..100, "13h30", fin en millis) pour le suivi du retrait. */
-private fun etatSuivi(debut: Int, fin: Int): Triple<Int, String, Long> {
+private fun etatSuivi(debut: Int, finBrut: Int): Triple<Int, String, Long> {
+    val fin = finBrut.coerceIn(1, 1439) // garde-fou : withHour crasherait au-delà
     val z = ZonedDateTime.now(PARIS)
     val maintenant = z.hour * 60 + z.minute
     val av = ((maintenant - debut) * 100 / (fin - debut).coerceAtLeast(1)).coerceIn(0, 100)
@@ -51,12 +54,26 @@ private fun etatSuivi(debut: Int, fin: Int): Triple<Int, String, Long> {
 /** Rappel quotidien : le repas du lendemain est dispo à la commande (lun–ven). */
 class MenuWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
-        if (estWeekend()) return Result.success()
+        val prefs = Prefs(applicationContext)
+        // Replanifie le prochain passage (chaîne sans dérive), si toujours actif.
+        suspend fun replanifier() {
+            if (runCatching { prefs.menu13h.first() }.getOrDefault(false)) {
+                planifierMenu13h(applicationContext, true)
+            }
+        }
         return try {
-            val prefs = Prefs(applicationContext)
+            if (estWeekend()) {
+                replanifier()
+                return Result.success()
+            }
+            if (!prefs.menu13h.first()) return Result.success()
             val menus = CroustillantApi.create()
                 .menusAVenir(cuisineCode(prefs.restoCode.first())).data
-            if (menus.isEmpty()) return Result.success()
+            if (menus.isEmpty()) {
+                android.util.Log.w("MenuWorker", "aucun menu reçu")
+                replanifier()
+                return Result.success()
+            }
             val aujourdHui = LocalDate.now(PARIS)
             // Prochain jour avec menu après aujourd'hui (= "demain", ou lundi si week-end).
             val prochain = menus.mapNotNull { m ->
@@ -78,15 +95,21 @@ class MenuWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             val formules = menuJour?.formulesMidi().orEmpty()
             val resume = if (formules.isEmpty()) "Hop, à table"
             else formules.joinToString(" ou ") { it.firstOrNull() ?: "" }.take(90)
-            val titreJour = prochain.format(
+            val nomJour = prochain.format(
                 java.time.format.DateTimeFormatter.ofPattern("EEEE", java.util.Locale.FRENCH),
             ).replaceFirstChar { it.uppercase() }
+            // "Demain" seulement si c'est vraiment demain (sinon ex "Lundi" après un week-end).
+            val etiquette = if (prochain == aujourdHui.plusDays(1)) "Demain" else nomJour
+            notifierMenus(applicationContext, etiquette, resume)
             prefs.setLastMenuDate(cle)
-            notifierMenus(applicationContext, titreJour, resume)
+            replanifier()
             Result.success()
         } catch (e: java.io.IOException) {
+            replanifier()
             Result.retry()
         } catch (e: Exception) {
+            android.util.Log.w("MenuWorker", "échec", e)
+            replanifier()
             Result.success() // réessaiera au prochain passage, sans vider la batterie
         }
     }
@@ -102,7 +125,11 @@ class StockWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         return try {
             val prefs = Prefs(applicationContext)
             val seuil = prefs.stockSeuil.first()
-            val client = OkHttpClient.Builder().build()
+            val client = OkHttpClient.Builder()
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .callTimeout(30, TimeUnit.SECONDS)
+                .build()
             val store = StoreApi.create(client)
             val produits = withContext(Dispatchers.IO) { store.products() }
             val dernierMinAvant = prefs.lastStockMin.first()
@@ -116,14 +143,17 @@ class StockWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             }
             var min = Int.MAX_VALUE
             var nomMin = ""
-            for (p in produits.take(6)) {
+            for (p in produits.take(12)) {
                 val stock = withContext(Dispatchers.IO) { stockProduit(client, p.permalink) }
                 if (stock != null && stock < min) {
                     min = stock
                     nomMin = p.name
                 }
             }
-            if (min == Int.MAX_VALUE) return Result.success()
+            if (min == Int.MAX_VALUE) {
+                android.util.Log.w("StockWorker", "aucun stock lisible")
+                return Result.success()
+            }
             val dernierMin = prefs.lastStockMin.first()
             if (min <= seuil) {
                 // Notifie une fois par palier : pas de spam si le stock ne bouge pas.
@@ -142,13 +172,16 @@ class StockWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         }
     }
 
-    private fun stockProduit(client: OkHttpClient, permalink: String): Int? {
+    private fun stockProduit(client: OkHttpClient, permalink: String): Int? = try {
         val req = Request.Builder().url(permalink).get().build()
-        val html = client.newCall(req).execute().use { it.body!!.string() }
+        val html = client.newCall(req).execute().use { it.body?.string().orEmpty() }
         // "79 en stock" dans data-product_variations : on prend le minimum.
-        return Regex("""(\d+)\s+en stock""").findAll(html)
+        Regex("""(\d+)\s+en stock""").findAll(html)
             .mapNotNull { it.groupValues[1].toIntOrNull() }
             .minOrNull()
+    } catch (e: Exception) {
+        android.util.Log.w("StockWorker", "page illisible $permalink", e)
+        null
     }
 }
 
@@ -158,15 +191,40 @@ class StockWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
  */
 class RdvWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
-        if (estWeekend()) return Result.success()
+        val prefs = Prefs(applicationContext)
+        suspend fun replanifier() {
+            if (runCatching { prefs.rdvRetrait.first() }.getOrDefault(false)) {
+                planifierRdv(applicationContext, true)
+            }
+        }
         return try {
-            val prefs = Prefs(applicationContext)
+            if (estWeekend()) {
+                replanifier()
+                return Result.success()
+            }
             if (!prefs.rdvRetrait.first()) return Result.success()
             val jar = PersistentCookieJar(CookieStore(applicationContext))
-            if (!jar.hasSession()) return Result.success() // pas connecté : rien à détecter
+            val auth = WpAuth(
+                OkHttpClient.Builder().cookieJar(jar).build(),
+                jar,
+                CrousStore(applicationContext),
+            )
+            if (!auth.assurerSession()) {
+                android.util.Log.w("RdvWorker", "pas de session, réessaie demain")
+                replanifier()
+                return Result.success() // pas connecté : rien à détecter
+            }
             val repo = OrdersRepo(OkHttpClient.Builder().cookieJar(jar).build())
             val aujourdHui = LocalDate.now(PARIS)
-            for (commande in repo.commandes().take(5)) {
+            for (commande in repo.commandes()) {
+                if (commande.statut.contains("annul", true) ||
+                    commande.statut.contains("rembours", true) ||
+                    commande.statut.contains("cancel", true) ||
+                    commande.statut.contains("failed", true) ||
+                    commande.statut.contains("échou", true)
+                ) {
+                    continue
+                }
                 val lignes = try {
                     repo.detail(commande)
                 } catch (e: Exception) {
@@ -182,12 +240,17 @@ class RdvWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
                     "%dh%02d".format(debutNotif / 60, debutNotif % 60),
                 )
                 planifierSuiviRetrait(applicationContext, commande.numero, debutNotif, fin)
+                replanifier()
                 return Result.success()
             }
+            replanifier()
             Result.success()
         } catch (e: java.io.IOException) {
+            replanifier()
             Result.retry()
         } catch (e: Exception) {
+            android.util.Log.w("RdvWorker", "échec", e)
+            replanifier()
             Result.success()
         }
     }
@@ -196,36 +259,47 @@ class RdvWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
 /** Suivi du retrait : notif persistante avec barre de progression, toutes les 15 min. */
 class PickupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
-    override suspend fun getForegroundInfo(): ForegroundInfo {
+    private fun parametres(): Triple<String, Int, Int> {
         val numero = inputData.getString("numero") ?: "?"
         val debut = inputData.getInt("debut", 11 * 60 + 30)
         val fin = inputData.getInt("fin", 13 * 60 + 30)
+        return Triple(numero, debut, fin)
+    }
+
+    private fun idNotif(): Int = inputData.getInt("notifId", 5)
+
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        val (numero, debut, fin) = parametres()
         val (av, finTexte, finMillis) = etatSuivi(debut, fin)
-        val notif = construireNotifRetrait(applicationContext, numero, finTexte, av, finMillis)
+        val notif = construireNotifRetrait(applicationContext, numero, finTexte, av, finMillis, idNotif())
         return if (Build.VERSION.SDK_INT >= 29) {
             ForegroundInfo(
-                5, notif,
+                idNotif(), notif,
                 android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
             )
         } else {
-            ForegroundInfo(5, notif)
+            ForegroundInfo(idNotif(), notif)
         }
     }
 
     override suspend fun doWork(): Result {
-        setForeground(getForegroundInfo())
-        val numero = inputData.getString("numero") ?: return Result.success()
-        val debut = inputData.getInt("debut", 11 * 60 + 30)
-        val fin = inputData.getInt("fin", 13 * 60 + 30)
+        // Le foreground peut être refusé (app tuée, OEM strict) : on continue en simple notif.
+        try {
+            setForeground(getForegroundInfo())
+        } catch (e: Exception) {
+            android.util.Log.w("PickupWorker", "foreground refusé, mode simple", e)
+        }
+        val (numero, debut, fin) = parametres()
         val z = ZonedDateTime.now(ZoneId.of("Europe/Paris"))
         val maintenant = z.hour * 60 + z.minute
         if (maintenant >= fin) {
             notifierBonAppetit(applicationContext, numero)
+            annulerRetrait(applicationContext, idNotif())
             Glyph.miroir(applicationContext, -1) // éteint
             return Result.success()
         }
         val (avancement, finTexte, finMillis) = etatSuivi(debut, fin)
-        notifierRetrait(applicationContext, numero, finTexte, avancement, finMillis)
+        notifierRetrait(applicationContext, numero, finTexte, avancement, finMillis, idNotif())
         Glyph.miroir(applicationContext, avancement)
         // Prochain point dans 15 min (ou à la fin).
         val prochainDelai = (fin - maintenant).coerceAtMost(15).coerceAtLeast(1)

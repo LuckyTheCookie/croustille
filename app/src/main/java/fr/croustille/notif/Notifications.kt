@@ -17,12 +17,16 @@ fun canaux(ctx: Context) {
     val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
     if (nm.getNotificationChannel(CANAL) == null) {
         nm.createNotificationChannel(
-            NotificationChannel(CANAL, "Rappels Croustille", NotificationManager.IMPORTANCE_DEFAULT),
+            NotificationChannel(CANAL, "Rappels Croustille", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Menus du lendemain, stock bas, commandes détectées."
+            },
         )
     }
     if (nm.getNotificationChannel(CANAL_RETRAIT) == null) {
         nm.createNotificationChannel(
-            NotificationChannel(CANAL_RETRAIT, "Suivi du retrait", NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(CANAL_RETRAIT, "Suivi du retrait", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Barre de progression pendant le créneau de retrait."
+            },
         )
     }
 }
@@ -42,19 +46,22 @@ private fun base(ctx: Context): Notification.Builder {
 
 /** Tap -> ouvre l'app directement sur l'onglet Commandes. */
 private fun versCommandes(ctx: Context, codeRequete: Int): PendingIntent {
-    val intent = Intent(ctx, MainActivity::class.java).putExtra("onglet", 2)
+    val intent = Intent(ctx, MainActivity::class.java)
+        .putExtra("onglet", 2)
+        .putExtra("notif_id", codeRequete)
+        .setAction("fr.croustille.NOTIF_$codeRequete")
     return PendingIntent.getActivity(
         ctx, codeRequete, intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 }
 
-fun notifierMenus(ctx: Context, titreJour: String, resume: String) {
+fun notifierMenus(ctx: Context, etiquetteJour: String, resume: String) {
     val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
     nm.notify(
         1,
         base(ctx)
-            .setContentTitle("Demain : $titreJour, c'est dispo !")
+            .setContentTitle("$etiquetteJour, c'est dispo !")
             .setContentText("$resume — commande avant 8h00.")
             .setContentIntent(versCommandes(ctx, 1))
             .build(),
@@ -109,26 +116,31 @@ fun construireNotifRetrait(
     finTexte: String,
     avancement: Int, // 0..100
     finMillis: Long,
-): Notification {
+    notifId: Int = 5,
+): android.app.Notification {
     canaux(ctx)
     val ecoule = (avancement.coerceIn(0, 100) * ECHELLE / 100)
     val style = NotificationCompat.ProgressStyle()
         .setStyledByProgress(false)
         .setProgress(ecoule)
-        .addProgressSegment(
+    if (ecoule > 0) {
+        style.addProgressSegment(
             NotificationCompat.ProgressStyle.Segment(ecoule).setColor(TERRACOTTA.toInt()),
         )
-        .addProgressSegment(
+    }
+    if (ECHELLE - ecoule > 0) {
+        style.addProgressSegment(
             NotificationCompat.ProgressStyle.Segment(ECHELLE - ecoule).setColor(GRIS.toInt()),
         )
-        .addProgressPoint(
-            NotificationCompat.ProgressStyle.Point(ECHELLE).setColor(0xFFFFFFFF.toInt()),
-        )
+    }
+    style.addProgressPoint(
+        NotificationCompat.ProgressStyle.Point(ECHELLE).setColor(0xFFFFFFFF.toInt()),
+    )
     return NotificationCompat.Builder(ctx, CANAL_RETRAIT)
         .setSmallIcon(R.drawable.ic_launcher_foreground)
         .setContentTitle("Retrait en cours · $numero")
         .setContentText("Montre ton numéro au comptoir · fin à $finTexte")
-        .setContentIntent(versCommandes(ctx, 5))
+        .setContentIntent(versCommandes(ctx, notifId))
         .setOngoing(true)
         .setOnlyAlertOnce(true)
         .setCategory(Notification.CATEGORY_PROGRESS)
@@ -146,9 +158,10 @@ fun notifierRetrait(
     finTexte: String,
     avancement: Int, // 0..100
     finMillis: Long,
+    notifId: Int = 5,
 ) {
     val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
-    nm.notify(ID_RETRAIT, construireNotifRetrait(ctx, numero, finTexte, avancement, finMillis))
+    nm.notify(notifId, construireNotifRetrait(ctx, numero, finTexte, avancement, finMillis, notifId))
 }
 
 fun notifierBonAppetit(ctx: Context, numero: String) {
@@ -165,6 +178,12 @@ fun notifierBonAppetit(ctx: Context, numero: String) {
 }
 
 /** Coupe la notif de suivi du retrait (bouton "tout arrêter", debug). */
-fun annulerRetrait(ctx: Context) {
-    ctx.getSystemService(NotificationManager::class.java)?.cancel(ID_RETRAIT)
+fun annulerRetrait(ctx: Context, id: Int = ID_RETRAIT) {
+    ctx.getSystemService(NotificationManager::class.java)?.cancel(id)
+}
+
+/** Coupe toutes les notifs Croustille d'un coup. */
+fun toutAnnuler(ctx: Context) {
+    val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
+    for (id in listOf(1, 2, 3, 4, 5, 6, 9)) nm.cancel(id)
 }

@@ -67,11 +67,11 @@ import androidx.core.content.ContextCompat
 import fr.croustille.data.IzlyRepo
 import fr.croustille.data.Prefs
 import fr.croustille.data.WpAuth
-import fr.croustille.notif.annulerRetrait
 import fr.croustille.notif.planifierMenu13h
 import fr.croustille.notif.planifierRdv
 import fr.croustille.notif.planifierStock
 import fr.croustille.notif.planifierSuiviRetrait
+import fr.croustille.notif.toutAnnuler
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -551,6 +551,22 @@ private fun ZoneTest(prefs: Prefs) {
     val appCtx = LocalContext.current.applicationContext
     var message by remember { mutableStateOf<String?>(null) }
 
+    var actionPermis by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val demandePermis = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) actionPermis?.invoke()
+        actionPermis = null
+    }
+    fun avecPermis(action: () -> Unit) {
+        if (Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(appCtx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
+            action()
+        } else {
+            actionPermis = action
+            demandePermis.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     Card(
         colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer),
         shape = RoundedCornerShape(24.dp),
@@ -564,41 +580,46 @@ private fun ZoneTest(prefs: Prefs) {
             )
             OutlinedButton(
                 onClick = {
-                    scope.launch {
-                        prefs.setRdvRetrait(true)
-                        planifierRdv(appCtx, true)
-                        androidx.work.WorkManager.getInstance(appCtx).enqueueUniqueWork(
-                            "rdv-test",
-                            androidx.work.ExistingWorkPolicy.REPLACE,
-                            androidx.work.OneTimeWorkRequestBuilder<fr.croustille.notif.RdvWorker>()
-                                .setConstraints(
-                                    androidx.work.Constraints.Builder()
-                                        .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
-                                        .build(),
-                                )
-                                .build(),
-                        )
-                        message = "Détection lancée : regarde tes notifs."
+                    avecPermis {
+                        scope.launch {
+                            prefs.setRdvRetrait(true)
+                            planifierRdv(appCtx, true)
+                            androidx.work.WorkManager.getInstance(appCtx).enqueueUniqueWork(
+                                "rdv-test",
+                                androidx.work.ExistingWorkPolicy.REPLACE,
+                                androidx.work.OneTimeWorkRequestBuilder<fr.croustille.notif.RdvWorker>()
+                                    .setConstraints(
+                                        androidx.work.Constraints.Builder()
+                                            .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                                            .build(),
+                                    )
+                                    .build(),
+                            )
+                            message = "Détection lancée : s'il y a une commande pour aujourd'hui, une notif arrive. Sinon, c'est normal qu'il ne se passe rien."
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Simuler : commande trouvée (détection 8h)")
+                Text("Tester la détection (comme à 8h)")
             }
             OutlinedButton(
                 onClick = {
-                    val z = java.time.ZonedDateTime.now(java.time.ZoneId.of("Europe/Paris"))
-                    val maintenant = z.hour * 60 + z.minute
-                    planifierSuiviRetrait(appCtx, "#TEST", maintenant, maintenant + 120)
-                    message = "Suivi lancé : notif persistante avec barre de progression."
+                    avecPermis {
+                        val z = java.time.ZonedDateTime.now(java.time.ZoneId.of("Europe/Paris"))
+                        val maintenant = z.hour * 60 + z.minute
+                        // Notif de test dédiée (ID 9) : ne touche pas au vrai suivi.
+                        planifierSuiviRetrait(appCtx, "#TEST", maintenant, maintenant + 120, 9)
+                        message = "Suivi de test lancé : barre de progression pendant 2h."
+                    }
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Default.Timer, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Simuler : il est 11h30 (suivi retrait)")
+                Text("Tester le suivi (barre 2h)")
             }
             OutlinedButton(
                 onClick = {
@@ -610,8 +631,8 @@ private fun ZoneTest(prefs: Prefs) {
                         planifierRdv(appCtx, false)
                         planifierStock(appCtx, false, 4)
                         androidx.work.WorkManager.getInstance(appCtx).cancelAllWork()
-                        annulerRetrait(appCtx)
-                        message = "Tout arrêté : notifs coupées et suivis annulés."
+                        toutAnnuler(appCtx)
+                        message = "Tout arrêté : rappels coupés, suivis annulés, notifs effacées."
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),

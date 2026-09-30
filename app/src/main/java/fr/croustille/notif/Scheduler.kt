@@ -46,11 +46,12 @@ fun planifierMenu13h(ctx: Context, actif: Boolean) {
         wm.cancelUniqueWork(W_MENU)
         return
     }
-    val req = PeriodicWorkRequestBuilder<MenuWorker>(24, TimeUnit.HOURS)
+    // One-shot réenchaîné par le worker lui-même : pas de dérive d'horaire (vs Periodic 24h).
+    val req = OneTimeWorkRequestBuilder<MenuWorker>()
         .setInitialDelay(delaiProchain13hOuvre(), TimeUnit.MILLISECONDS)
         .setConstraints(reseau)
         .build()
-    wm.enqueueUniquePeriodicWork(W_MENU, ExistingPeriodicWorkPolicy.UPDATE, req)
+    wm.enqueueUniqueWork(W_MENU, ExistingWorkPolicy.REPLACE, req)
 }
 
 /** Vérifie le stock toutes les `heures` + un passage immédiat à l'activation. */
@@ -58,6 +59,7 @@ fun planifierStock(ctx: Context, actif: Boolean, heures: Long) {
     val wm = WorkManager.getInstance(ctx)
     if (!actif) {
         wm.cancelUniqueWork(W_STOCK)
+        wm.cancelUniqueWork("$W_STOCK-immediat")
         return
     }
     wm.enqueueUniqueWork(
@@ -68,7 +70,7 @@ fun planifierStock(ctx: Context, actif: Boolean, heures: Long) {
     val req = PeriodicWorkRequestBuilder<StockWorker>(heures, TimeUnit.HOURS)
         .setConstraints(reseau)
         .build()
-    wm.enqueueUniquePeriodicWork(W_STOCK, ExistingPeriodicWorkPolicy.UPDATE, req)
+    wm.enqueueUniquePeriodicWork(W_STOCK, ExistingPeriodicWorkPolicy.REPLACE, req)
 }
 
 /** Tous les jours ouvrés à 8h : y a-t-il une commande à retirer aujourd'hui ? */
@@ -79,21 +81,29 @@ fun planifierRdv(ctx: Context, actif: Boolean) {
         annulerRetrait(ctx)
         return
     }
-    val req = PeriodicWorkRequestBuilder<RdvWorker>(24, TimeUnit.HOURS)
+    // One-shot réenchaîné par le worker lui-même : heure exacte, sans dérive.
+    val req = OneTimeWorkRequestBuilder<RdvWorker>()
         .setInitialDelay(delaiProchain8hOuvre(), TimeUnit.MILLISECONDS)
         .setConstraints(reseau)
         .build()
-    wm.enqueueUniquePeriodicWork(W_RDV, ExistingPeriodicWorkPolicy.UPDATE, req)
+    wm.enqueueUniqueWork(W_RDV, ExistingWorkPolicy.REPLACE, req)
 }
 
 /** Suivi du retrait : un passage toutes les 15 min entre le début et la fin. */
-fun planifierSuiviRetrait(ctx: Context, numero: String, debutMinutes: Int, finMinutes: Int) {
+fun planifierSuiviRetrait(
+    ctx: Context,
+    numero: String,
+    debutMinutes: Int,
+    finMinutes: Int,
+    notifId: Int = 5,
+) {
     val wm = WorkManager.getInstance(ctx)
     val maintenant = minutesParis()
     val data = androidx.work.workDataOf(
         "numero" to numero,
         "debut" to debutMinutes,
         "fin" to finMinutes,
+        "notifId" to notifId,
     )
     val delai = ((debutMinutes - maintenant).coerceAtLeast(0)).toLong()
     val req = OneTimeWorkRequestBuilder<PickupWorker>()
