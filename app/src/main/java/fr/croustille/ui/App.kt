@@ -49,7 +49,17 @@ fun App(prefs: Prefs, ongletInitial: Int = 0) {
     val cart = remember { CartRepo(store, client, auth::assurerSession) }
     val orders = remember { OrdersRepo(client, auth::assurerSession) }
     val izlyStore = remember { IzlyStore(ctx) }
-    val izly = remember { IzlyRepo(OkHttpClient.Builder().cookieJar(JarMemoire()).build(), izlyStore) }
+    val izly = remember {
+        IzlyRepo(
+            OkHttpClient.Builder()
+                .cookieJar(JarMemoire())
+                .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                .callTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build(),
+            izlyStore,
+        )
+    }
 
     // Reconnexion silencieuse au lancement (la boutique déconnecte souvent).
     LaunchedEffect(Unit) {

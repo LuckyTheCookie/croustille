@@ -12,15 +12,29 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 
 private const val BASE_URL = "https://crousandgo.crous-strasbourg.fr/fonderie/"
 
+/**
+ * Préférences chiffrées, avec repli non chiffré si le trousseau est invalide
+ * (ex: écran de verrouillage modifié -> KeyPermanentlyInvalidatedException).
+ */
+fun prefsSecurisees(ctx: Context, nom: String): SharedPreferences {
+    val app = ctx.applicationContext
+    return try {
+        EncryptedSharedPreferences.create(
+            app,
+            nom,
+            MasterKey.Builder(app).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        )
+    } catch (e: Exception) {
+        android.util.Log.w("Prefs", "trousseau invalide pour $nom, repli local", e)
+        app.getSharedPreferences("${nom}_clair", Context.MODE_PRIVATE)
+    }
+}
+
 /** Stockage chiffré des cookies de session WordPress/WooCommerce. */
 class CookieStore(ctx: Context) {
-    private val sp: SharedPreferences = EncryptedSharedPreferences.create(
-        ctx.applicationContext,
-        "session_cookies",
-        MasterKey.Builder(ctx.applicationContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
+    private val sp: SharedPreferences = prefsSecurisees(ctx, "session_cookies")
 
     fun save(host: String, cookies: List<Cookie>) {
         sp.edit { putStringSet(host, cookies.map { it.toString() }.toSet()) }
@@ -41,13 +55,7 @@ class CookieStore(ctx: Context) {
 
 /** Identifiants CrousAndGo chiffrés (reconnexion automatique silencieuse). */
 class CrousStore(ctx: Context) {
-    private val sp: SharedPreferences = EncryptedSharedPreferences.create(
-        ctx.applicationContext,
-        "crous",
-        MasterKey.Builder(ctx.applicationContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
+    private val sp: SharedPreferences = prefsSecurisees(ctx, "crous")
 
     fun lire(): Pair<String, String>? {
         val id = sp.getString("id", null)
